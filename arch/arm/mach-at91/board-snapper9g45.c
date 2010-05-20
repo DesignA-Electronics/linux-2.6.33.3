@@ -249,46 +249,11 @@ static struct ac97c_platform_data sn9g45_ac97_data = {
 };
 
 
-/*
- * LEDs ... these could all be PWM-driven, for variable brightness
- */
-static struct gpio_led sn9g45_leds[] = {
-	{	/* "top" led, red, powerled */
-		.name			= "d8",
-		.gpio			= AT91_PIN_PD30,
-		.default_trigger	= "heartbeat",
-	},
-	{	/* "left" led, green, userled2, pwm3 */
-		.name			= "d6",
-		.gpio			= AT91_PIN_PD0,
-		.active_low		= 1,
-		.default_trigger	= "nand-disk",
-	},
-#if !(defined(CONFIG_LEDS_ATMEL_PWM) || defined(CONFIG_LEDS_ATMEL_PWM_MODULE))
-	{	/* "right" led, green, userled1, pwm1 */
-		.name			= "d7",
-		.gpio			= AT91_PIN_PD31,
-		.active_low		= 1,
-		.default_trigger	= "mmc0",
-	},
-#endif
+static struct i2c_board_info __initdata sn9g45_i2c_devices[] = {
+	{
+		I2C_BOARD_INFO("tlv320aic23", 0x1a),
+        },
 };
-
-
-/*
- * PWM Leds
- */
-static struct gpio_led sn9g45_pwm_led[] = {
-#if defined(CONFIG_LEDS_ATMEL_PWM) || defined(CONFIG_LEDS_ATMEL_PWM_MODULE)
-	{	/* "right" led, green, userled1, pwm1 */
-		.name			= "d7",
-		.gpio			= 1,	/* is PWM channel number */
-		.active_low		= 1,
-		.default_trigger	= "none",
-	},
-#endif
-};
-
 
 
 static void __init sn9g45_board_init(void)
@@ -305,19 +270,15 @@ static void __init sn9g45_board_init(void)
 	/* NAND */
 	sn9g45_add_device_nand();
 	/* I2C */
-	at91_add_device_i2c(0, NULL, 0);
+	at91_add_device_i2c(0, sn9g45_i2c_devices, ARRAY_SIZE(sn9g45_i2c_devices));
+	/* Audio */
+        /* FIXME: Don't have record pins here */
+	at91_add_device_ssc(AT91SAM9G45_ID_SSC0, ATMEL_SSC_TX);
 #if 0
 	/* LCD Controller */
 	at91_add_device_lcdc(&sn9g45_lcdc_data);
 	/* Touch Screen */
 	at91_add_device_tsadcc(&sn9g45_tsadcc_data);
-	/* Push Buttons */
-	sn9g45_add_device_buttons();
-	/* AC97 */
-	at91_add_device_ac97(&sn9g45_ac97_data);
-	/* LEDs */
-	at91_gpio_leds(sn9g45_leds, ARRAY_SIZE(sn9g45_leds));
-	at91_pwm_leds(sn9g45_pwm_led, ARRAY_SIZE(sn9g45_pwm_led));
 #endif
 }
 
