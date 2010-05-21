@@ -69,6 +69,9 @@ obj-$(CONFIG_MACH_AT91SAM9G45EKES) += board-sam9m10g45ek.o
 # Snapper9G45 board-specific support
 obj-$(CONFIG_MACH_SNAPPER9G45) += board-snapper9g45.o
 
+# Hammerhead board-specific support
+obj-$(CONFIG_MACH_HAMMERHEAD) += board-hammerhead.o
+
 # AT91CAP9 board-specific support
 obj-$(CONFIG_MACH_AT91CAP9ADK)	+= board-cap9adk.o
 

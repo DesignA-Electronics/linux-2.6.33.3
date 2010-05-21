@@ -375,6 +375,11 @@ config MACH_SNAPPER9G45
 	help
 	  Select this if you are using Bluewater Systems Snapper 9G45
 
+config MACH_HAMMERHEAD
+	bool "Bluewater Systems Hammerhead"
+	help
+	  Select this if you are using Bluewater Systems Hammerhead
+
 endif
 
 # ----------------------------------------------------------
