@@ -1,10 +1,7 @@
 /*
- *  Board-specific setup code for the AT91SAM9M10G45 Evaluation Kit family
+ *  Board-specific setup code for the Bluewater Systems Snapper 9g45 module
  *
- *  Covers: * AT91SAM9G45-EKES  board
- *          * AT91SAM9M10G45-EK board
- *
- *  Copyright (C) 2009 Atmel Corporation.
+ *  Copyright (C) 2010 Bluewater Systems Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,11 +15,7 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/spi/spi.h>
 #include <linux/fb.h>
-#include <linux/gpio_keys.h>
-#include <linux/input.h>
-#include <linux/leds.h>
 #include <linux/clk.h>
 
 #include <mach/hardware.h>
@@ -45,7 +38,6 @@
 #include "sam9_smc.h"
 #include "generic.h"
 
-
 static void __init sn9g45_map_io(void)
 {
 	/* Initialize processor: 12.000 MHz crystal */
@@ -67,33 +59,27 @@ static void __init sn9g45_init_irq(void)
 	at91sam9g45_init_interrupts(NULL);
 }
 
-
 /*
  * USB HS Host port (common to OHCI & EHCI)
  */
 static struct at91_usbh_data __initdata sn9g45_usbh_hs_data = {
-	.ports		= 2,
-	.vbus_pin	= {AT91_PIN_PD1, AT91_PIN_PD3},
+	.ports		= 1,
 };
-
 
 /*
  * USB HS Device port
  */
 static struct usba_platform_data __initdata sn9g45_usba_udc_data = {
-	.vbus_pin	= AT91_PIN_PB19,
+	.vbus_pin	= AT91_PIN_PC0,
 };
-
 
 /*
  * MACB Ethernet device
  */
 static struct at91_eth_data __initdata sn9g45_macb_data = {
-	/*.phy_irq_pin	= AT91_PIN_PD5,*/
 	.is_rmii	= 1,
         .phy_mask       = ~(1 << 27), // Phy 0x1b
 };
-
 
 /*
  * NAND flash
@@ -178,7 +164,6 @@ static void __init sn9g45_add_device_nand(void)
 	at91_add_device_nand(&sn9g45_nand_data);
 }
 
-
 /*
  * LCD Controller
  */
@@ -230,7 +215,6 @@ static struct atmel_lcdfb_info __initdata sn9g45_lcdc_data = {
 static struct atmel_lcdfb_info __initdata sn9g45_lcdc_data;
 #endif
 
-
 /*
  * Touchscreen
  */
@@ -240,21 +224,11 @@ static struct at91_tsadcc_data sn9g45_tsadcc_data = {
 	.ts_sample_hold_time	= 0x0a,
 };
 
-
-/*
- * AC97
- * reset_pin is not connected: NRST
- */
-static struct ac97c_platform_data sn9g45_ac97_data = {
-};
-
-
 static struct i2c_board_info __initdata sn9g45_i2c_devices[] = {
 	{
 		I2C_BOARD_INFO("tlv320aic23", 0x1a),
         },
 };
-
 
 static void __init sn9g45_board_init(void)
 {
