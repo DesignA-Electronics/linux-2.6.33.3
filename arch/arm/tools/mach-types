@@ -12,7 +12,7 @@
 #
 #   http://www.arm.linux.org.uk/developer/machines/?action=new
 #
-# Last update: Fri May 21 01:36:48 2010
+# Last update: Thu May 27 22:32:38 2010
 #
 # machine_is_xxx	CONFIG_xxxx		MACH_TYPE_xxx		number
 #
@@ -2852,3 +2852,16 @@ msm8x55_svlte_surf	MACH_MSM8X55_SVLTE_SURF	MSM8X55_SVLTE_SURF	2864
 quickstep		MACH_QUICKSTEP		QUICKSTEP		2865
 dmw96			MACH_DMW96		DMW96			2866
 hammerhead		MACH_HAMMERHEAD		HAMMERHEAD		2867
+trident			MACH_TRIDENT		TRIDENT			2868
+lightning		MACH_LIGHTNING		LIGHTNING		2869
+iconnect		MACH_ICONNECT		ICONNECT		2870
+autobot			MACH_AUTOBOT		AUTOBOT			2871
+coconut			MACH_COCONUT		COCONUT			2872
+durian			MACH_DURIAN		DURIAN			2873
+cayenne			MACH_CAYENNE		CAYENNE			2874
+fuji			MACH_FUJI		FUJI			2875
+synology_6282		MACH_SYNOLOGY_6282	SYNOLOGY_6282		2876
+em1sy			MACH_EM1SY		EM1SY			2877
+m502			MACH_M502		M502			2878
+matrix518		MACH_MATRIX518		MATRIX518		2879
+tiny_gurnard		MACH_TINY_GURNARD	TINY_GURNARD		2880
