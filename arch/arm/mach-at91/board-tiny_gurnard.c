@@ -1,5 +1,5 @@
 /*
- *  Board-specific setup code for the Bluewater Systems Snapper 9g45 module
+ *  Board-specific setup code for the Bluewater Systems Tiny Gurnard board
  *
  *  Copyright (C) 2010 Bluewater Systems Ltd.
  *
@@ -15,11 +15,10 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/fb.h>
 #include <linux/clk.h>
+#include <linux/debugfs.h>
 
 #include <mach/hardware.h>
-#include <video/atmel_lcdc.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -38,6 +37,45 @@
 #include "sam9_smc.h"
 #include "generic.h"
 
+#define FPGA_IRQ        AT91_PIN_PC11
+
+/* Take from 7.3 of document tiny_gurnard 06 */
+#define FPGA_ROM_PHYS          AT91_CHIPSELECT_0
+#define FPGA_ROM_VIRT          (0xf0000000)
+#define FPGA_ROM_SIZE          0x1000
+
+#define FPGA_IRQ_PHYS           (FPGA_ROM_PHYS + 0x01000000)
+#define FPGA_IRQ_VIRT           (0xf0100000)
+#define FPGA_IRQ_SIZE           (0x1000)
+
+#define FPGA_NAND_CTRL_PHYS          (FPGA_ROM_PHYS + 0x02000000)
+#define FPGA_NAND_DATA_PHYS          (FPGA_ROM_PHYS + 0x02800000)
+
+#define FPGA_ROM_REG(x) (*(volatile uint32_t *)(FPGA_ROM_VIRT + (x)))
+#define FPGA_ID         FPGA_ROM_REG(0x00)
+#define FPGA_BUILD_DATE FPGA_ROM_REG(0x04)
+#define FPGA_EMULATION  FPGA_ROM_REG(0x08)
+#define FPGA_BUILD_TEXT FPGA_ROM_REG(0x400)
+
+#define FPGA_IRQ_REG(x) (*(volatile uint32_t *)(FPGA_IRQ_VIRT + (x)))
+#define FPGA_IER        FPGA_IRQ_REG(0x00)
+#define FPGA_IFR        FPGA_IRQ_REG(0x04)
+
+static struct map_desc fpga_io_desc[] __initdata = {
+        {
+                .virtual        = FPGA_ROM_VIRT,
+                .pfn            = __phys_to_pfn(FPGA_ROM_PHYS),
+                .length         = FPGA_ROM_SIZE,
+                .type           = MT_DEVICE,
+        },
+        {
+                .virtual        = FPGA_IRQ_VIRT,
+                .pfn            = __phys_to_pfn(FPGA_IRQ_PHYS),
+                .length         = FPGA_IRQ_SIZE,
+                .type           = MT_DEVICE,
+        },
+};
+
 static void __init tiny_gurnard_map_io(void)
 {
 	/* Initialize processor: 12.000 MHz crystal */
@@ -50,11 +88,70 @@ static void __init tiny_gurnard_map_io(void)
 
 	/* set serial console to ttyS0 (ie, DBGU) */
 	at91_set_serial_console(0);
+
+        /* Map the FPGA base area */
+        iotable_init(fpga_io_desc, ARRAY_SIZE(fpga_io_desc));
 }
+
+static void tiny_gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
+{
+        uint32_t pending = FPGA_IER;
+
+        /* If the FPGA is not programmed, then skip it */
+        if ((FPGA_ID & 0xffff0000) != 0x000d0000) {
+                pr_err("Tiny Gurnard FPGA IRQ, but FPGA not programmed\n");
+                return;
+        }
+
+        do {
+                if (likely(pending)) {
+                        irq = BOARD_IRQ(0) + __ffs(pending);
+                        generic_handle_irq(irq);
+                }
+                pending = FPGA_IER;
+        } while (pending);
+}
+
+static void tiny_gurnard_mask_irq(unsigned int irq)
+{
+        int fpga_irq = (irq - BOARD_IRQ(0));
+        FPGA_IER |= 1 << fpga_irq;
+}
+
+static void tiny_gurnard_unmask_irq(unsigned int irq)
+{
+        int fpga_irq = (irq - BOARD_IRQ(0));
+        FPGA_IER &= ~(1 << fpga_irq);
+}
+
+static struct irq_chip tiny_gurnard_irq_chip = {
+        .name           = "FPGA",
+        .ack            = tiny_gurnard_mask_irq,
+        .mask           = tiny_gurnard_mask_irq,
+        .unmask         = tiny_gurnard_unmask_irq,
+};
 
 static void __init tiny_gurnard_init_irq(void)
 {
+        int irq;
 	at91sam9g45_init_interrupts(NULL);
+
+        /* Until the FPGA is programmed, the IRQ pin will float.
+         * Turn on the in-CPU pull-up to prevent this being a problem
+         */
+        at91_set_gpio_input(FPGA_IRQ, 1);
+
+        /* The Gurnard FPGA has two irqs - one for NAND and one for
+           emulation
+         */
+        for (irq = BOARD_IRQ(0); irq <= BOARD_IRQ(1); irq++) {
+                set_irq_chip(irq, &tiny_gurnard_irq_chip);
+                set_irq_handler(irq, handle_level_irq);
+                set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
+        }
+
+        set_irq_type(FPGA_IRQ, IRQ_TYPE_EDGE_BOTH);
+        set_irq_chained_handler(FPGA_IRQ, tiny_gurnard_irq_handler);
 }
 
 /*
@@ -153,14 +250,70 @@ static void __init tiny_gurnard_add_device_nand(void)
 	at91_add_device_nand(&tiny_gurnard_nand_data);
 }
 
+/* FPGA SPI device for user-space programming */
+static struct spi_board_info tiny_gurnard_spi_board_info[] __initdata = {
+	{
+		.modalias = "spidev",
+		.max_speed_hz = 3000000,
+		.bus_num = 0,
+		.chip_select = 0,
+	},
+};
+
+/* FPGA NAND access */
+static struct resource fpga_nand_resources[] = {
+	[0] = {
+		.start	= FPGA_NAND_CTRL_PHYS,
+		.end	= (FPGA_NAND_CTRL_PHYS + 0x1000) - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+        [1] = {
+                .start  = FPGA_NAND_CTRL_PHYS + 0x00800000,
+                /* Make it a large (ie: 4k) window, so we can do stm/rdm
+                 * commands for better speed */
+                .end    = FPGA_NAND_CTRL_PHYS + 0x00801000 - 1,
+                .flags  = IORESOURCE_MEM,
+        },
+        [2] = {
+                .start  = BOARD_IRQ(0),
+                .end    = BOARD_IRQ(0),
+                .flags  = IORESOURCE_IRQ,
+        },
+};
+
+static struct platform_device tiny_gurnard_nand_device = {
+	.name		= "gurnard_nand",
+	.resource	= fpga_nand_resources,
+	.num_resources	= ARRAY_SIZE(fpga_nand_resources),
+};
+
 static void __init tiny_gurnard_board_init(void)
 {
+#ifdef CONFIG_DEBUG_FS
+        struct dentry *dir;
+#endif
 	/* Serial */
 	at91_add_device_serial();
 	/* Ethernet */
 	at91_add_device_eth(&tiny_gurnard_macb_data);
 	/* NAND */
 	tiny_gurnard_add_device_nand();
+        /* FPGA attached to the SPI bus */
+	at91_add_device_spi(tiny_gurnard_spi_board_info,
+		ARRAY_SIZE(tiny_gurnard_spi_board_info));
+        /* FPGA NAND */
+	platform_device_register(&tiny_gurnard_nand_device);
+
+#ifdef CONFIG_DEBUG_FS
+        dir = debugfs_create_dir("fpga", NULL);
+        if (!dir)
+                return;
+        debugfs_create_x32("IER", S_IRUGO | S_IWUSR, dir, (uint32_t *)&FPGA_IER);
+        debugfs_create_x32("IFR", S_IRUGO | S_IWUSR, dir, (uint32_t *)&FPGA_IFR);
+        debugfs_create_x32("ID", S_IRUGO, dir, (uint32_t *)&FPGA_ID);
+        debugfs_create_x32("BUILD_DATE", S_IRUGO, dir, (uint32_t *)&FPGA_BUILD_DATE);
+        debugfs_create_x32("EMULATION", S_IRUGO, dir, (uint32_t *)&FPGA_EMULATION);
+#endif
 }
 
 MACHINE_START(TINY_GURNARD, "Tiny Gurnard")
