@@ -1422,6 +1422,155 @@ void __init at91_set_serial_console(unsigned portnr) {}
 void __init at91_add_device_serial(void) {}
 #endif
 
+static u64 mmc_dmamask = DMA_BIT_MASK(32);
+static struct mci_platform_data mmc0_data, mmc1_data;
+
+static struct resource mmc_0_resources[] = {
+	[0] = {
+		.start	= AT91SAM9G45_BASE_MCI0,
+		.end	= AT91SAM9G45_BASE_MCI0 + SZ_16K - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+	[1] = {
+		.start	= AT91SAM9G45_ID_MCI0,
+		.end	= AT91SAM9G45_ID_MCI0,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct resource mmc_1_resources[] = {
+	[0] = {
+		.start	= AT91SAM9G45_BASE_MCI1,
+		.end	= AT91SAM9G45_BASE_MCI1 + SZ_16K - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+	[1] = {
+		.start	= AT91SAM9G45_ID_MCI1,
+		.end	= AT91SAM9G45_ID_MCI1,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device at91sam9g45_mmc0_device = {
+	.name		= "atmel_mci",
+	.id		= 0,
+	.dev		= {
+		.dma_mask		= &mmc_dmamask,
+		.coherent_dma_mask	= DMA_BIT_MASK(32),
+		.platform_data		= &mmc0_data,
+	},
+	.resource	= mmc_0_resources,
+	.num_resources	= ARRAY_SIZE(mmc_0_resources),
+};
+
+static struct platform_device at91sam9g45_mmc1_device = {
+	.name		= "atmel_mci",
+	.id		= 1,
+	.dev		= {
+		.dma_mask		= &mmc_dmamask,
+		.coherent_dma_mask	= DMA_BIT_MASK(32),
+		.platform_data		= &mmc1_data,
+	},
+	.resource	= mmc_1_resources,
+	.num_resources	= ARRAY_SIZE(mmc_1_resources),
+};
+
+void __init at91_add_device_mci(short mmc_id, struct mci_platform_data *data)
+{
+	if (!data)
+		return;
+
+	/* Must have at least one usable slot */
+	if (!data->slot[0].bus_width)
+		return;
+
+#if defined(CONFIG_MMC_ATMELMCI_DMA)
+	{
+	struct mci_dma_data	*slave;
+
+	slave = kzalloc(sizeof(struct mci_dma_data), GFP_KERNEL);
+
+	/* DMA slave channel configuration */
+	slave->sdata.dma_dev = &at_hdmac_device.dev;
+	slave->sdata.reg_width = DW_DMA_SLAVE_WIDTH_32BIT;
+	slave->sdata.cfg = ATC_FIFOCFG_HALFFIFO
+			 | ATC_SRC_H2SEL_HW | ATC_DST_H2SEL_HW;
+	slave->sdata.ctrla = ATC_SCSIZE_16 | ATC_DCSIZE_16;
+	if (mmc_id == 0)	/* MCI0 */
+		slave->sdata.cfg |= ATC_SRC_PER(AT_DMA_ID_MCI0)
+				 | ATC_DST_PER(AT_DMA_ID_MCI0);
+
+	else			/* MCI1 */
+		slave->sdata.cfg |= ATC_SRC_PER(AT_DMA_ID_MCI1)
+				 | ATC_DST_PER(AT_DMA_ID_MCI1);
+
+	data->dma_slave = slave;
+	}
+#endif
+
+
+	/* input/irq */
+	if (data->slot[0].detect_pin) {
+		at91_set_gpio_input(data->slot[0].detect_pin, 1);
+		at91_set_deglitch(data->slot[0].detect_pin, 1);
+	}
+	if (data->slot[0].wp_pin)
+		at91_set_gpio_input(data->slot[0].wp_pin, 1);
+
+	if (mmc_id == 0) {		/* MCI0 */
+
+		/* CLK */
+		at91_set_A_periph(AT91_PIN_PA0, 0);
+
+		/* CMD */
+		at91_set_A_periph(AT91_PIN_PA1, 1);
+
+		/* DAT0, maybe DAT1..DAT3 and maybe DAT4..DAT7 */
+		at91_set_A_periph(AT91_PIN_PA2, 1);
+		if (data->slot[0].bus_width == 4) {
+			at91_set_A_periph(AT91_PIN_PA3, 1);
+			at91_set_A_periph(AT91_PIN_PA4, 1);
+			at91_set_A_periph(AT91_PIN_PA5, 1);
+			if (data->slot[0].bus_width == 8) {
+				at91_set_A_periph(AT91_PIN_PA6, 1);
+				at91_set_A_periph(AT91_PIN_PA7, 1);
+				at91_set_A_periph(AT91_PIN_PA8, 1);
+				at91_set_A_periph(AT91_PIN_PA9, 1);
+			}
+		}
+
+		mmc0_data = *data;
+		at91_clock_associate("mci0_clk", &at91sam9g45_mmc0_device.dev, "mci_clk");
+		platform_device_register(&at91sam9g45_mmc0_device);
+
+	} else {			/* MCI1 */
+
+		/* CLK */
+		at91_set_A_periph(AT91_PIN_PA31, 0);
+
+		/* CMD */
+		at91_set_A_periph(AT91_PIN_PA22, 1);
+
+		/* DAT0, maybe DAT1..DAT3 and maybe DAT4..DAT7 */
+		at91_set_A_periph(AT91_PIN_PA23, 1);
+		if (data->slot[0].bus_width == 4) {
+			at91_set_A_periph(AT91_PIN_PA24, 1);
+			at91_set_A_periph(AT91_PIN_PA25, 1);
+			at91_set_A_periph(AT91_PIN_PA26, 1);
+			if (data->slot[0].bus_width == 8) {
+				at91_set_A_periph(AT91_PIN_PA27, 1);
+				at91_set_A_periph(AT91_PIN_PA28, 1);
+				at91_set_A_periph(AT91_PIN_PA29, 1);
+				at91_set_A_periph(AT91_PIN_PA30, 1);
+			}
+		}
+
+		mmc1_data = *data;
+		at91_clock_associate("mci1_clk", &at91sam9g45_mmc1_device.dev, "mci_clk");
+		platform_device_register(&at91sam9g45_mmc1_device);
+
+	}
+}
 
 /* -------------------------------------------------------------------- */
 /*

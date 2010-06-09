@@ -17,6 +17,7 @@
 #include <linux/platform_device.h>
 #include <linux/fb.h>
 #include <linux/clk.h>
+#include <linux/atmel-mci.h>
 
 #include <mach/hardware.h>
 #include <video/atmel_lcdc.h>
@@ -48,7 +49,10 @@ static void __init sn9g45_map_io(void)
 
 	/* USART0 not connected on the -EK board */
 	/* USART1 on ttyS2. (Rx, Tx, RTS, CTS) */
-	at91_register_uart(AT91SAM9G45_ID_US1, 2, ATMEL_UART_CTS | ATMEL_UART_RTS);
+	at91_register_uart(AT91SAM9G45_ID_US1, 1, 0);
+	at91_register_uart(AT91SAM9G45_ID_US2, 2, 
+			   ATMEL_UART_CTS | ATMEL_UART_RTS);
+	at91_register_uart(AT91SAM9G45_ID_US3, 3, ATMEL_UART_RTS);
 
 	/* set serial console to ttyS0 (ie, DBGU) */
 	at91_set_serial_console(0);
@@ -164,6 +168,14 @@ static void __init sn9g45_add_device_nand(void)
 	at91_add_device_nand(&sn9g45_nand_data);
 }
 
+static struct mci_platform_data __initdata sn9g45_mmc_data = {
+	.slot[0] = {
+		.bus_width	= 4,
+		.detect_pin	= -1,
+		.wp_pin		= -1,
+	},
+};
+
 /*
  * LCD Controller
  */
@@ -254,6 +266,7 @@ static void __init sn9g45_board_init(void)
 	/* Touch Screen */
 	at91_add_device_tsadcc(&sn9g45_tsadcc_data);
 #endif
+	at91_add_device_mci(0, &sn9g45_mmc_data);
 }
 
 MACHINE_START(SNAPPER9G45, "Snapper9G45")
