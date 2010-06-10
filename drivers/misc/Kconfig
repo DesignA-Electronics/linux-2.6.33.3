@@ -292,6 +292,12 @@ config TI_DAC7512
 	  This driver can also be built as a module. If so, the module
 	  will be calles ti_dac7512.
 
+config HI358X
+        tristate "Holt HI358x ARINC-429 transcievers"
+        depends on SPI && SYSFS
+        help
+          Enable support for the Holt HI358x ARINC-429 transcievers
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
