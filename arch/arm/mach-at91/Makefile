@@ -84,6 +84,9 @@ obj-$(CONFIG_MACH_AT91EB01)	+= board-eb01.o
 # Drivers
 obj-y				+= leds.o
 
+# Bluewater baseboards
+obj-$(CONFIG_BOARD_SALMON_TEST_SYSTEM)	+= board-salmon-test-system.o
+
 # Power Management
 obj-$(CONFIG_PM)		+= pm.o
 obj-$(CONFIG_AT91_SLOW_CLOCK)	+= pm_slowclock.o
