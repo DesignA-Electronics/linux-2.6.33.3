@@ -2191,6 +2191,15 @@ config FB_BROADSHEET
 	  and could also have been called by other names when coupled with
 	  a bridge adapter.
 
+config FB_SSD2119
+        tristate "SSD2119 SPI Smart LCD controller"
+        depends on FB && SPI
+        select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+        help
+          This enables support for the SSD2119 LCD Controller.
+
 source "drivers/video/omap/Kconfig"
 source "drivers/video/omap2/Kconfig"
 
