@@ -29,9 +29,14 @@
 #define MAX_STACKS      2
 
 /* FIXME: This should be provided via the platform data */
-static struct mtd_partition gurnard_partitions[] = {
+static struct mtd_partition gurnard_partitions_stacks[MAX_STACKS] = {
         {
-                .name   = "Data",
+                .name   = "Stack0",
+                .offset = 0,
+                .size   = MTDPART_SIZ_FULL,
+        },
+        {
+                .name   = "Stack1",
                 .offset = 0,
                 .size   = MTDPART_SIZ_FULL,
         },
@@ -670,7 +675,7 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
 {
         struct platform_device *pdev = to_platform_device(dev);
         struct gurnard_nand_host *host = platform_get_drvdata(pdev);
-        int i;
+        int i, n;
         int res;
         for (i = 0; i < MAX_STACKS; i++) {
                 struct gurnard_nand_stack *stack = &host->stack[i];
@@ -693,9 +698,9 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                         dev_err(dev, "Only 8-bit devices supported\n");
                         continue;
                 }
-                for (i = 0; nand_flash_ids[i].name != NULL; i++) {
-                        if (device == nand_flash_ids[i].id)
-                                size = nand_flash_ids[i].chipsize << 20;
+                for (n = 0; nand_flash_ids[n].name != NULL; n++) {
+                        if (device == nand_flash_ids[n].id)
+                                size = nand_flash_ids[n].chipsize << 20;
                 }
                 if (size == 0) {
                         dev_err(dev, "Can't find nand record for device 0x%x\n",
@@ -735,8 +740,8 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 //mtd->size = 64 * 1024 * 1024;
                 mtd->oobsize = oobsize * 4;
 
-                res = add_mtd_partitions(mtd, gurnard_partitions,
-                                ARRAY_SIZE(gurnard_partitions));
+                res = add_mtd_partitions(mtd, &gurnard_partitions_stacks[i], 
+                                1);
                 if (res)
                         dev_err(dev, "Can't add MTD partitions\n");
         }
