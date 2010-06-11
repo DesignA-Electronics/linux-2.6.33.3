@@ -57,6 +57,13 @@ static struct spi_board_info salmon_test_spi_devices[] = {
 		.platform_data	= &ssd2119_data,
 	},
 	{
+		.modalias	= "stmpe610",
+		.chip_select	= 3,
+		.bus_num	= 1,
+		.irq		= gpio_to_irq(AT91_PIN_PD0),
+		.max_speed_hz	= 800000,
+	},
+	{
 		/* 429_CSA */
 		.modalias	= "hi358x",
 		.max_speed_hz	= 2000000,
@@ -90,6 +97,9 @@ static int __init salmon_test_init(void)
 	 */
 	at91_set_GPIO_periph(AT91_PIN_PD1, 0);
 	at91_set_GPIO_periph(AT91_PIN_PB11, 0);
+
+	/* Touchscreen interrupt gpio */
+	at91_set_GPIO_periph(AT91_PIN_PD0, 0);
 
 	at91_add_device_spi(salmon_test_spi_devices,
 			    ARRAY_SIZE(salmon_test_spi_devices));
