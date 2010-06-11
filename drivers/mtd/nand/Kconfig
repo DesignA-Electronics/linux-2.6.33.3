@@ -34,6 +34,10 @@ config MTD_NAND_MUSEUM_IDS
 	  NAND chips (page size 256 byte, erase size 4-8KiB). The IDs
 	  of these chips were reused by later, larger chips.
 
+config MTD_NAND_GURNARD
+	tristate "NAND support for the Gurnard FPGA RAID NAND Controller"
+	depends on MTD_NAND && MACH_TINY_GURNARD
+
 config MTD_NAND_AUTCPU12
 	tristate "SmartMediaCard on autronix autcpu12 board"
 	depends on ARCH_AUTCPU12
