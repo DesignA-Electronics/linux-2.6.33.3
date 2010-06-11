@@ -40,7 +40,10 @@
  * symbols in gpio.h for ones handled indirectly as GPIOs.
  * We make provision for 5 banks of GPIO.
  */
-#define	NR_IRQS		(NR_AIC_IRQS + (5 * 32))
+#define NR_BOARD_IRQS   32
+#define IRQ_BOARD_START (NR_AIC_IRQS + (5 * 32))
+#define	NR_IRQS		(IRQ_BOARD_START + NR_BOARD_IRQS)
+#define BOARD_IRQ(x)    (IRQ_BOARD_START + (x))
 
 /* FIQ is AIC source 0. */
 #define FIQ_START AT91_ID_FIQ
