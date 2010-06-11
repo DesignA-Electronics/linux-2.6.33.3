@@ -577,4 +577,12 @@ config TOUCHSCREEN_PCAP
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called pcap_ts.
+
+config TOUCHSCREEN_STMPE610
+        tristate "STMPE610 'Stimpy' SPI touchscreen controller"
+        depends on SPI
+        help
+          Say Y here if you have an STMPE610 'Stimpy' SPI touchscreen 
+          controller.
+
 endif
