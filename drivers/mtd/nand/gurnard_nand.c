@@ -33,7 +33,12 @@
 #define ECC_CALC_SIZE 3
 
 #define MAX_STACKS      2
+
+/* Display debugging each time we do a low-level NAND access */
 // #define RAW_ACCESS_DEBUG
+
+/* Check that the Linux ECC calculations match the FPGA ones */
+#define VERIFY_FPGA_ECC_CALC
 
 /* The first 4-bytes (32-bit word) of the ecc is the bad-block marker
  * for each of the 4 8-bit devices. We then have 192 bytes of ECC,
@@ -306,20 +311,19 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
 
         nand_ecc = &oob[mtd->ecclayout->eccpos[0]];
 
-#if 1
-        /* Check that the Linux ECC calculations match the FPGA ones */
+#ifdef VERIFY_FPGA_ECC_CALC
         //nand_ecc[0] ^= 0x1; // put a single bit error into the ecc we get back from the device
         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
-                __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], ECC_CHUNK_SIZE, 
+                __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], ECC_CHUNK_SIZE,
                                 calc_ecc);
-                if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE], calc_ecc, 
+                if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE], calc_ecc,
                                         ECC_CALC_SIZE) != 0) {
-                        dev_err(&host->pdev->dev, 
+                        dev_err(&host->pdev->dev,
                                 "FPGA/Linux differ in ECC calc. 0x%llx/%d: "
                                 "0x%2.2x%2.2x%2.2x != 0x%2.2x%2.2x%2.2x\n",
                                         addr, i * ECC_CALC_SIZE,
-                                        fpga_ecc[i * ECC_CALC_SIZE], 
-                                        fpga_ecc[i * ECC_CALC_SIZE + 1], 
+                                        fpga_ecc[i * ECC_CALC_SIZE],
+                                        fpga_ecc[i * ECC_CALC_SIZE + 1],
                                         fpga_ecc[i * ECC_CALC_SIZE + 2],
                                         calc_ecc[0], calc_ecc[1], calc_ecc[2]);
                         return -EINVAL;
@@ -337,23 +341,23 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
         /* Iterate over each 256 byte block checking if it is valid */
         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
                 int ret;
-                if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE], 
+                if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE],
                            &nand_ecc[i * ECC_CALC_SIZE], ECC_CALC_SIZE) == 0)
                         continue;
-               
-                ret = __nand_correct_data(&buf[i * ECC_CHUNK_SIZE], 
+
+                ret = __nand_correct_data(&buf[i * ECC_CHUNK_SIZE],
                                 &nand_ecc[i * ECC_CALC_SIZE],
                                 &fpga_ecc[i * ECC_CALC_SIZE],
                                 ECC_CHUNK_SIZE);
                 if (ret < 0) {
-                        dev_err(&host->pdev->dev, 
-                                "Uncorrectable ECC error at 0x%llx:%d\n", 
+                        dev_err(&host->pdev->dev,
+                                "Uncorrectable ECC error at 0x%llx:%d\n",
                                 addr, i * ECC_CHUNK_SIZE);
                         mtd->ecc_stats.failed++;
                         return -EBADMSG;
                 } else if (ret > 0) {
-                        dev_warn(&host->pdev->dev, 
-                                 "Corrected %d ECC failures at 0x%llx:%d\n", 
+                        dev_warn(&host->pdev->dev,
+                                 "Corrected %d ECC failures at 0x%llx:%d\n",
                                  ret, addr, i * ECC_CHUNK_SIZE);
                         mtd->ecc_stats.corrected += ret;
                 } else
@@ -361,7 +365,7 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
                                  "Empty ECC correction at 0x%llx:%d\n",
                                  addr, i * ECC_CHUNK_SIZE);
 
-                                 
+
         }
         return 0;
 }
@@ -426,7 +430,7 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                         ecc[i] = reg_readl(ECC);
         }
 
-        /* Reset the buffers for the OOB read, otherwise when we 
+        /* Reset the buffers for the OOB read, otherwise when we
          * go to read them back we get incorrect counts from BUFF_LEN
          */
         reg_writel(BIT_BUFF_CLEAR, CFG_SET);
