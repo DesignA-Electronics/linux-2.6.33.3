@@ -110,6 +110,8 @@ struct gurnard_nand_host {
         void __iomem    *reg_base;
         void __iomem    *data_base;
         struct gurnard_nand_stack stack[MAX_STACKS];
+        uint8_t         *oob_tmp;       /* Temporary area for oob data */
+        uint8_t         *data_tmp;      /* Temporary area for buffer data */
 };
 
 /**
@@ -120,6 +122,10 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host, unsigned
         /* FIXME: Should we be aquiring a lock if chip_mask is non-zero, and
          * clearing the lock if it is zero, or does the MTD layer cover us
          * for this?
+         */
+        /* FIXME: Should be taking the page address as an argument, and 
+         * selecting the appropriate level in the stack via the STACK ADDR 
+         * bits in the FPGA CFG_SET/CFG_CLEAR registers
          */
        reg_writel(MASK_NCE, CFG_SET);
        if (chip_mask)
@@ -305,13 +311,11 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
 {
         struct gurnard_nand_stack *stack = mtd->priv;
         struct gurnard_nand_host *host = stack->host;
-        uint8_t *nand_ecc;
+        uint8_t *nand_ecc = &oob[mtd->ecclayout->eccpos[0]];
         int i;
-        uint8_t calc_ecc[ECC_CALC_SIZE];
-
-        nand_ecc = &oob[mtd->ecclayout->eccpos[0]];
 
 #ifdef VERIFY_FPGA_ECC_CALC
+        uint8_t calc_ecc[ECC_CALC_SIZE];
         //nand_ecc[0] ^= 0x1; // put a single bit error into the ecc we get back from the device
         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
                 __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], ECC_CHUNK_SIZE,
@@ -378,7 +382,6 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
         struct gurnard_nand_host *host = stack->host;
         uint8_t addr[5];
         uint32_t ecc[mtd->ecclayout->eccbytes / 4];
-        uint8_t test_oob[mtd->oobsize];
         int ret = 0;
         int i, len;
 
@@ -409,7 +412,7 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
 
         /* We always do oob reads, just so that we can verify the ecc */
         if (!oob)
-                oob = test_oob;
+                oob = host->oob_tmp;
 
         gurnard_write_command(host, NAND_CMD_READ0);
         gurnard_write_address(host, addr, 5);
@@ -514,6 +517,31 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
                 ret = -EIO;
         }
         gurnard_select_chips(host, 0);
+
+#ifdef CONFIG_MTD_NAND_VERIFY_WRITE
+        if (!ret) {
+                /* We've just written a page, so read it back & 
+                 * confirm the data is valid */
+
+                /* FIXME: Should be using the in-fpga read-verify mechanism */
+                ret = gurnard_nand_read_page(mtd, to, host->data_tmp, 
+                                host->oob_tmp, -1);
+                if (ret)
+                        return ret;
+                if (memcmp(host->data_tmp, buf, mtd->writesize) != 0) {
+                        dev_err(&host->pdev->dev, 
+                                "Write verify failure at 0x%llx\n",
+                                to);
+                        ret = -EIO;
+                } else if (memcmp(host->oob_tmp, oob, mtd->oobsize) != 0) {
+                        dev_err(&host->pdev->dev, 
+                                "Write verify oob failure at 0x%llx\n",
+                                to);
+                        ret = -EIO;
+                }
+        }
+         
+#endif
 
         return ret;
 }
@@ -630,7 +658,6 @@ static int gurnard_nand_write_oob(struct mtd_info *mtd, loff_t to,
         uint64_t len = 0, cur_addr;
         int auto_ecc = (ops->mode != MTD_OOB_RAW);
         int ret = 0;
-        uint8_t oobtmp[mtd->oobsize];
 
         if (to & (mtd->writesize - 1)) {
                 dev_err(&host->pdev->dev,
@@ -673,9 +700,9 @@ static int gurnard_nand_write_oob(struct mtd_info *mtd, loff_t to,
                 }
                 len = mtd->writesize;
                 if (ops->mode == MTD_OOB_AUTO) {
-                        oob = oobtmp;
-                        memset(oobtmp, 0xff, sizeof(oobtmp));
-                        memcpy(&oobtmp[mtd->ecclayout->oobfree[0].offset],
+                        oob = host->oob_tmp;
+                        memset(oob, 0xff, mtd->oobsize);
+                        memcpy(&oob[mtd->ecclayout->oobfree[0].offset],
                                         ops->oobbuf, ops->ooblen);
                 } else
                         oob = ops->oobbuf;
@@ -713,7 +740,6 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
         uint64_t cur_addr = from;
         uint8_t *buf, *oob;
         uint64_t len = 0;
-        uint8_t oobtmp[mtd->oobsize];
         int ret = 0;
         struct mtd_ecc_stats stats;
 
@@ -749,7 +775,7 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
                 }
                 len = mtd->writesize;
                 if (ops->mode == MTD_OOB_AUTO)
-                        oob = oobtmp;
+                        oob = host->oob_tmp;
                 else
                         oob = ops->oobbuf;
         } else
@@ -782,7 +808,7 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
                         buf += mtd->writesize;
                 if (ops->oobbuf && ops->mode == MTD_OOB_AUTO)
                         memcpy(ops->oobbuf,
-                               &oobtmp[mtd->ecclayout->oobfree[0].offset],
+                               &oob[mtd->ecclayout->oobfree[0].offset],
                                ops->ooblen);
                 cur_addr += mtd->writesize;
         }
@@ -821,12 +847,13 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
 
 static int gurnard_block_mark_bad(struct mtd_info *mtd, loff_t offs)
 {
-        uint32_t oob[mtd->oobsize / 4];
+        struct gurnard_nand_stack *stack = mtd->priv;
+        struct gurnard_nand_host *host = stack->host;
 
-        memset(oob, 0xff, sizeof(oob));
-        oob[0] = 0;
+        memset(host->oob_tmp, 0xff, mtd->oobsize);
+        host->oob_tmp[0] = 0;
 
-        return gurnard_nand_write_page(mtd, offs, NULL, (uint8_t *)oob, 0);
+        return gurnard_nand_write_page(mtd, offs, NULL, host->oob_tmp, 0);
 }
 
 static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
@@ -835,7 +862,6 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
         struct gurnard_nand_stack *stack = mtd->priv;
         struct gurnard_nand_host *host = stack->host;
         uint64_t cur_addr = to;
-        uint8_t oob[mtd->oobsize];
         int ret = 0;
 
         //printk("gurnard_nand_write: to=0x%llx len=0x%x\n", to, len);
@@ -854,9 +880,9 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
                                 len);
                 return -EINVAL;
         }
-        memset(oob, 0xff, mtd->oobsize);
+        memset(host->oob_tmp, 0xff, mtd->oobsize);
         while (cur_addr < to + len) {
-                ret = gurnard_nand_write_page(mtd, cur_addr, buf, oob, 1);
+                ret = gurnard_nand_write_page(mtd, cur_addr, buf, host->oob_tmp, 1);
                 if (ret < 0)
                         break;
                 buf += mtd->writesize;
@@ -868,6 +894,9 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
         return ret;
 }
 
+/**
+ * FIXME: No unregistering of mtd devices
+ */
 static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                            const char *buf, size_t count)
 {
@@ -937,6 +966,26 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 // cap it for testing to 128MB
                 //mtd->size = 128 * 1024 * 1024;
                 mtd->oobsize = oobsize * 4;
+
+                if (!host->oob_tmp) {
+                        host->oob_tmp = kmalloc(mtd->oobsize, GFP_KERNEL);
+                        if (!host->oob_tmp) {
+                                dev_err(dev, 
+                                        "Unable to allocate %d bytes of oob area\n",
+                                        mtd->oobsize);
+                                continue;
+                        }
+                }
+
+                if (!host->data_tmp) {
+                        host->data_tmp = kmalloc(mtd->writesize, GFP_KERNEL);
+                        if (!host->data_tmp) {
+                                dev_err(dev,
+                                        "Unable to allocate %d bytes of data area\n",
+                                        mtd->writesize);
+                                continue;
+                        }
+                }
 
                 /* We don't have partitions on this device, just
                  * a single large area
@@ -1083,6 +1132,7 @@ map_failed:
 static int __exit gurnard_nand_remove(struct platform_device *pdev)
 {
         struct gurnard_nand_host *host = platform_get_drvdata(pdev);
+        /* FIXME: Not unregistering MTD devices */
         sysfs_remove_group(&pdev->dev.kobj, &gurnard_group);
         platform_set_drvdata(pdev, NULL);
         iounmap(host->reg_base);
