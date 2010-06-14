@@ -22,25 +22,11 @@
 #include <linux/platform_device.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/nand.h>
-#include <linux/mtd/partitions.h>
 
 #include <asm/io.h>
 
 #define MAX_STACKS      2
-
-/* FIXME: This should be provided via the platform data */
-static struct mtd_partition gurnard_partitions_stacks[MAX_STACKS] = {
-        {
-                .name   = "Stack0",
-                .offset = 0,
-                .size   = MTDPART_SIZ_FULL,
-        },
-        {
-                .name   = "Stack1",
-                .offset = 0,
-                .size   = MTDPART_SIZ_FULL,
-        },
-};
+// #define RAW_ACCESS_DEBUG
 
 /* The first 4-bytes (32-bit word) of the ecc is the bad-block marker
  * for each of the 4 8-bit devices. We then have 192 bytes of ECC,
@@ -300,55 +286,6 @@ static int gurnard_read_status(struct gurnard_nand_host *host)
         return status;
 }
 
-/**
- * MTD Interface functions
- */
-static int gurnard_nand_erase(struct mtd_info *mtd, struct erase_info *instr)
-{
-        struct gurnard_nand_stack *stack = mtd->priv;
-        struct gurnard_nand_host *host = stack->host;
-        int ret = 0;
-        uint8_t addr[3];
-        uint32_t status;
-        uint64_t erased = 0, cur_addr = instr->addr;
-
-        if (cur_addr & (mtd->erasesize - 1)) {
-                dev_err(&host->pdev->dev, "Erase from invalid block address: 0x%llx\n",
-                                cur_addr);
-                return -EINVAL;
-        }
-
-        gurnard_select_chips(host, stack->device_addr);
-        while (erased < instr->len && cur_addr < mtd->size && ret == 0) {
-                //printk("gurnard_nand_erase: Addr=0x%llx Length=0x%llx\n",
-                                //cur_addr, instr->len);
-                offset_to_block(cur_addr, addr);
-                gurnard_write_command(host, NAND_CMD_ERASE1);
-                gurnard_write_address(host, addr, 3);
-                gurnard_write_command(host, NAND_CMD_ERASE2);
-                gurnard_rnb_wait(host);
-                status = gurnard_read_status(host);
-
-                /* If bit 0 on any of the chips is set indicates an erase failure */
-                if (status & 0x01010101) {
-                        dev_err(&host->pdev->dev, "Erase failure at 0x%llx: 0x%x\n",
-                                        cur_addr, status);
-                        ret = -EIO;
-                }
-
-                erased += mtd->erasesize;
-                cur_addr += mtd->erasesize;
-        }
-        gurnard_select_chips(host, 0);
-        if (ret == 0)
-                instr->state = MTD_ERASE_DONE;
-        else
-                instr->state = MTD_ERASE_FAILED;
-        if (!ret)
-                mtd_erase_callback(instr);
-        return ret;
-}
-
 static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                 uint8_t *buf, uint8_t *oob, int max_len)
 {
@@ -374,9 +311,12 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                 addr[0] = mtd->writesize / 4;
                 addr[1] = (mtd->writesize / 4) >> 8;
         }
-        //printk("gurnard_nand_read_page: from=0x%llx%s%s addr=0x%2.2x%2.2x%2.2x%2.2x%2.2x\n",
-                        //from, buf ? " data" : "", oob ? " oob" : "",
-                        //addr[4], addr[3], addr[2], addr[1], addr[0]);
+#ifdef RAW_ACCESS_DEBUG
+        printk("read: 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
+                        from, 
+                        addr[4], addr[3], addr[2], addr[1], addr[0],
+                        buf ? " data" : "", oob ? " oob" : "");
+#endif
 
 
         gurnard_write_command(host, NAND_CMD_READ0);
@@ -408,8 +348,11 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         int ret = 0;
         uint32_t status;
 
-        //printk("gurnard_nand_write_page: to=0x%llx%s%s\n", to,
-                        //buf ? " data" : "", oob ? " oob" : "");
+#ifdef RAW_ACCESS_DEBUG
+        printk("write: 0x%llx%s%s%s\n", to,
+                        buf ? " data" : "", oob ? " oob" : "",
+                        auto_ecc ? " auto": "");
+#endif
 
         if (to >= mtd->size)
                 return -EINVAL;
@@ -468,6 +411,66 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         return ret;
 }
 
+static int gurnard_nand_erase_block(struct gurnard_nand_host *host, 
+                loff_t block_addr)
+{
+        char addr[3];
+        uint32_t status;
+
+#ifdef RAW_ACCESS_DEBUG
+        printk("erase: 0x%llx\n", block_addr);
+#endif
+
+        offset_to_block(block_addr, addr);
+        gurnard_write_command(host, NAND_CMD_ERASE1);
+        gurnard_write_address(host, addr, 3);
+        gurnard_write_command(host, NAND_CMD_ERASE2);
+        gurnard_rnb_wait(host);
+        status = gurnard_read_status(host);
+
+        /* If bit 0 on any of the chips is set indicates an erase failure */
+        if (status & 0x01010101) {
+                dev_err(&host->pdev->dev, "Erase failure at 0x%llx: 0x%x\n",
+                                block_addr, status);
+                return -EIO;
+        }
+        return 0;
+}
+
+/**
+ * MTD Interface functions
+ */
+static int gurnard_nand_erase(struct mtd_info *mtd, struct erase_info *instr)
+{
+        struct gurnard_nand_stack *stack = mtd->priv;
+        struct gurnard_nand_host *host = stack->host;
+        int ret = 0;
+        uint64_t erased = 0, cur_addr = instr->addr;
+
+        if (cur_addr & (mtd->erasesize - 1)) {
+                dev_err(&host->pdev->dev, "Erase from invalid block address: 0x%llx\n",
+                                cur_addr);
+                return -EINVAL;
+        }
+
+        gurnard_select_chips(host, stack->device_addr);
+        while (erased < instr->len && cur_addr < mtd->size && ret == 0) {
+                ret = gurnard_nand_erase_block(host, cur_addr);
+
+                erased += mtd->erasesize;
+                cur_addr += mtd->erasesize;
+        }
+        gurnard_select_chips(host, 0);
+        if (ret == 0)
+                instr->state = MTD_ERASE_DONE;
+        else
+                instr->state = MTD_ERASE_FAILED;
+        if (!ret)
+                mtd_erase_callback(instr);
+        return ret;
+}
+
+
 static int gurnard_nand_read(struct mtd_info *mtd, loff_t from, size_t len,
                 size_t *retlen, uint8_t *buf)
 {
@@ -508,35 +511,64 @@ static int gurnard_nand_write_oob(struct mtd_info *mtd, loff_t to,
         struct gurnard_nand_stack *stack = mtd->priv;
         struct gurnard_nand_host *host = stack->host;
         uint8_t *buf, *oob;
-        uint64_t len, cur_addr;
+        uint64_t len = 0, cur_addr;
         int auto_ecc = (ops->mode != MTD_OOB_RAW);
         int ret = 0;
+        uint8_t oobtmp[mtd->oobsize];
 
         if (to & (mtd->writesize - 1)) {
                 dev_err(&host->pdev->dev,
-                        "OOB Write to non page-aligned address 0x%llx\n",
+                        "OOB write to non page-aligned address 0x%llx\n",
                         to);
                 return -EINVAL;
         }
 
-        if (ops->datbuf)
+        if (ops->mode == MTD_OOB_RAW) {
+                dev_err(&host->pdev->dev,
+                        "No write support for OOB raw mode\n");
+                return -EINVAL;
+        }
+
+        if (!ops->datbuf && !ops->oobbuf)
+                return -EINVAL;
+
+        if (ops->datbuf) {
+                if (ops->len == 0)
+                        return 0;
                 len = ops->len;
-        else if (ops->oobbuf) {
-                if (ops->ooblen % mtd->oobsize) {
+        }
+
+        if (ops->oobbuf) {
+                if ((ops->mode == MTD_OOB_AUTO &&
+                    ops->ooblen > mtd->ecclayout->oobavail) ||
+                    (ops->mode == MTD_OOB_PLACE &&
+                     ops->ooblen > mtd->oobsize)) {
                         dev_err(&host->pdev->dev,
-                                "OOB Write with invalid OOB length: %d\n",
-                                ops->ooblen);
+                                "OOB write with too much OOB data: 0x%x mode=%d\n",
+                                ops->ooblen, ops->mode);
                         return -EINVAL;
                 }
-                len = (ops->ooblen / mtd->oobsize) * mtd->writesize;
+                /* Always just do a single block write if we're doing oob */
+                if (len && len != mtd->writesize) {
+                        dev_err(&host->pdev->dev,
+                                "OOB write with more than one page of data: %lld\n",
+                                len);
+                        return -EINVAL;
+                }
+                len = mtd->writesize;
+                if (ops->mode == MTD_OOB_AUTO) {
+                        oob = oobtmp;
+                        memset(oobtmp, 0xff, sizeof(oobtmp));
+                        memcpy(&oobtmp[mtd->ecclayout->oobfree[0].offset], 
+                                        ops->oobbuf, ops->ooblen);
+                } else
+                        oob = ops->oobbuf;
         } else
-                return -EINVAL;
+                oob = NULL;
 
         if (to + len > mtd->size)
                 return -EINVAL;
-        if (!len)
-                return 0;
-        oob = ops->oobbuf;
+
         buf = ops->datbuf;
 
         cur_addr = to;
@@ -545,13 +577,14 @@ static int gurnard_nand_write_oob(struct mtd_info *mtd, loff_t to,
                 ret = gurnard_nand_write_page(mtd, cur_addr, buf, oob, auto_ecc);
                 if (buf)
                         buf += mtd->writesize;
-                if (oob)
-                        oob += mtd->oobsize;
                 cur_addr += mtd->writesize;
         }
 
-        ops->retlen = buf - ops->datbuf;
-        ops->oobretlen = oob - ops->oobbuf;
+        if (buf)
+                ops->retlen = buf - ops->datbuf;
+        if (oob)
+                ops->oobretlen = ops->mode == MTD_OOB_AUTO ?
+                        ops->ooblen : mtd->oobsize;
 
         return ret;
 }
@@ -563,13 +596,48 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
         struct gurnard_nand_host *host = stack->host;
         uint64_t cur_addr = from;
         uint8_t *buf, *oob;
-        uint64_t len;
+        uint64_t len = 0;
+        uint8_t oobtmp[mtd->oobsize];
 
-        if (ops->datbuf)
+        if (!ops->datbuf && !ops->oobbuf)
+                return -EINVAL;
+
+        if (ops->datbuf) {
+                if (!ops->len)
+                        return 0;
                 len = ops->len;
-        else if (ops->oobbuf)
-                len = (ops->ooblen / mtd->oobsize) * mtd->writesize;
-        else
+        }
+        if (ops->mode == MTD_OOB_RAW) {
+                dev_err(&host->pdev->dev,
+                        "No read support for OOB raw mode\n");
+                return -EINVAL;
+        }
+
+        if (ops->oobbuf) {
+                if ((ops->mode == MTD_OOB_AUTO &&
+                    ops->ooblen > mtd->ecclayout->oobavail) ||
+                    (ops->mode == MTD_OOB_PLACE &&
+                     ops->ooblen > mtd->oobsize)) {
+                        dev_err(&host->pdev->dev,
+                                "OOB read with too much OOB data: %d\n",
+                                ops->ooblen);
+                        return -EINVAL;
+                }
+                if (len && len != mtd->writesize) {
+                        dev_err(&host->pdev->dev,
+                                "OOB read with more than one page of data: %lld\n",
+                                len);
+                        return -EINVAL;
+                }
+                len = mtd->writesize;
+                if (ops->mode == MTD_OOB_AUTO)
+                        oob = oobtmp;
+                else
+                        oob = ops->oobbuf;
+        } else
+                oob = NULL;
+
+        if (!len)
                 return -EINVAL;
 
         //printk("gurnard_nand_read_oob: from=0x%llx len=0x%llx (dat:%d oob:%d)\n",
@@ -584,20 +652,23 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
                                 from);
                 return -EINVAL;
         }
-        oob = ops->oobbuf;
         buf = ops->datbuf;
 
         while (cur_addr < from + len) {
                 gurnard_nand_read_page(mtd, cur_addr, buf, oob, -1);
                 if (buf)
                         buf += mtd->writesize;
-                if (oob)
-                        oob += mtd->oobsize;
+                if (ops->oobbuf && ops->mode == MTD_OOB_AUTO)
+                        memcpy(ops->oobbuf, 
+                               &oobtmp[mtd->ecclayout->oobfree[0].offset], 
+                               ops->ooblen);
                 cur_addr += mtd->writesize;
         }
 
-        ops->retlen = buf - ops->datbuf;
-        ops->oobretlen = oob - ops->oobbuf;
+        if (buf)
+                ops->retlen = buf - ops->datbuf;
+        if (oob)
+                ops->oobretlen = mtd->oobsize;
 
         return 0;
 
@@ -605,7 +676,7 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
 
 static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
 {
-        uint32_t oob[mtd->oobsize / 4];
+        uint32_t oob;
         int ret;
 
         if (offs > mtd->size)
@@ -614,12 +685,14 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
         /* We're only interested in the page at the beginning of the block */
         offs = offs & ~(mtd->erasesize - 1);
 
-        ret = gurnard_nand_read_page(mtd, offs, NULL, (uint8_t *)oob, 4);
+        ret = gurnard_nand_read_page(mtd, offs, NULL, (uint8_t *)&oob, 4);
         if (ret)
                 return ret;
-        //if (oob[0] != 0xffffffff)
-                //printk("block_is_bad: 0x%llx=0x%x\n", offs, oob[0]);
-        return (oob[0] != 0xffffffff);
+#ifdef RAW_ACCESS_DEBUG
+        if (oob != 0xffffffff)
+                printk("block_is_bad: 0x%llx=0x%x\n", offs, oob);
+#endif
+        return (oob != 0xffffffff);
 }
 
 static int gurnard_block_mark_bad(struct mtd_info *mtd, loff_t offs)
@@ -641,7 +714,7 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
         uint8_t oob[mtd->oobsize];
         int ret = 0;
 
-        //printk("gurnard_nand_write: to=0x%llx len=0x%x\n", to, len);
+        printk("gurnard_nand_write: to=0x%llx len=0x%x\n", to, len);
 
         if (to + len > mtd->size)
                 return -EINVAL;
@@ -666,6 +739,7 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
                 cur_addr += mtd->writesize;
         }
         *retlen = cur_addr - to;
+        printk("nand_write done: %d 0x%llx\n", ret, cur_addr - to);
 
         return ret;
 }
@@ -709,7 +783,7 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 }
 
                 mtd->priv = stack;
-                snprintf(stack->name, sizeof(stack->name), "Stack %d", i);
+                snprintf(stack->name, sizeof(stack->name), "Stack%d", i);
                 mtd->name = stack->name;
                 mtd->type = MTD_NANDFLASH;
                 mtd->flags = MTD_CAP_NANDFLASH;
@@ -736,14 +810,16 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 mtd->writesize = writesize * 4;
                 mtd->erasesize = erasesize * 4;
                 mtd->size = size * 4;
-                // cap it for testing to 64MB
-                //mtd->size = 64 * 1024 * 1024;
+                // cap it for testing to 128MB
+                //mtd->size = 128 * 1024 * 1024;
                 mtd->oobsize = oobsize * 4;
 
-                res = add_mtd_partitions(mtd, &gurnard_partitions_stacks[i], 
-                                1);
+                /* We don't have partitions on this device, just
+                 * a single large area
+                 */
+                res = add_mtd_device(mtd);
                 if (res)
-                        dev_err(dev, "Can't add MTD partitions\n");
+                        dev_err(dev, "Can't add MTD device\n");
         }
 
         return count;
