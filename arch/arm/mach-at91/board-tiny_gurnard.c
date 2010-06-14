@@ -95,33 +95,37 @@ static void __init tiny_gurnard_map_io(void)
 
 static void tiny_gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
-        uint32_t pending = FPGA_IER;
+        uint32_t pending = FPGA_IFR;
 
         /* If the FPGA is not programmed, then skip it */
         if ((FPGA_ID & 0xffff0000) != 0x000d0000) {
                 pr_err("Tiny Gurnard FPGA IRQ, but FPGA not programmed\n");
                 return;
         }
+        //printk("gurnard irq: %d\n", irq);
 
         do {
                 if (likely(pending)) {
                         irq = BOARD_IRQ(0) + __ffs(pending);
                         generic_handle_irq(irq);
+                        FPGA_IFR = 1 << (irq - BOARD_IRQ(0));
                 }
-                pending = FPGA_IER;
+                pending = FPGA_IFR;
         } while (pending);
 }
 
 static void tiny_gurnard_mask_irq(unsigned int irq)
 {
         int fpga_irq = (irq - BOARD_IRQ(0));
-        FPGA_IER |= 1 << fpga_irq;
+        //printk("gurnard mask irq: %d %d\n", irq, fpga_irq);
+        FPGA_IER &= ~(1 << fpga_irq);
 }
 
 static void tiny_gurnard_unmask_irq(unsigned int irq)
 {
         int fpga_irq = (irq - BOARD_IRQ(0));
-        FPGA_IER &= ~(1 << fpga_irq);
+        //printk("gurnard unmask irq: %d %d\n", irq, fpga_irq);
+        FPGA_IER |= 1 << fpga_irq;
 }
 
 static struct irq_chip tiny_gurnard_irq_chip = {
