@@ -22,8 +22,15 @@
 #include <linux/platform_device.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/nand.h>
+#include <linux/mtd/nand_ecc.h>
+#include <linux/mutex.h>
 
 #include <asm/io.h>
+
+/* Over how many bytes does the FPGA calculate its ECC values? */
+#define ECC_CHUNK_SIZE 256
+/* How many bytes of ECC do we get for each chunk? */
+#define ECC_CALC_SIZE 3
 
 #define MAX_STACKS      2
 // #define RAW_ACCESS_DEBUG
@@ -105,8 +112,9 @@ struct gurnard_nand_host {
  */
 static inline void gurnard_select_chips(struct gurnard_nand_host *host, unsigned int chip_mask)
 {
-        /* FIXME: Should be aquiring a lock if chip_mask is non-zero, and
-         * clearing the lock if it is zero
+        /* FIXME: Should we be aquiring a lock if chip_mask is non-zero, and
+         * clearing the lock if it is zero, or does the MTD layer cover us
+         * for this?
          */
        reg_writel(MASK_NCE, CFG_SET);
        if (chip_mask)
@@ -152,35 +160,31 @@ static inline void gurnard_write_address(struct gurnard_nand_host *host, uint8_t
 
 static inline void gurnard_read_buf(struct gurnard_nand_host *host, uint32_t *buf, uint32_t buflen)
 {
-        reg_writel(buflen - 1, BUFF_LEN);
-        /* FIXME: Don't have to wait till it is completely done,
-         * we can read BUFF_LEN and read that many bytes out, and
-         * keep doing that until we've read the lot
-         */
+/* FIXME: Issue reading this way from the FPGA.
+ * Smarter reading, where we read as they become available rather
+ * than wait until until all the data is in the FPGA before we
+ * take it out
+ */
 #if 0
+        uint32_t read = 0;
+        reg_writel(buflen - 1, BUFF_LEN);
+        /* Note: BUFF_LEN doesn't reduce as we read from it, it is the
+         * count of bytes read since it was last reset
+         */
         do {
-                uint32_t avail = reg_readl(BUFF_LEN);
+                uint32_t total = reg_readl(BUFF_LEN);
+                int32_t avail = total - read;
                 if (avail) {
-                        /* For some reason BUFF_LEN doesn't reduce? */
-                        printk("%d bytes available %d remaining\n", avail, buflen);
-                        avail = min(avail, buflen);
+                        //printk("%d bytes available %d read %d/%d total\n", avail, read, total, buflen);
                         readsl(host->data_base, buf, avail >> 2);
-                        buflen -= avail;
-                        buf += avail;
+                        read += avail;
+                        buf += avail / 4;
                 }
-        } while (buflen);
-#endif
-
-#if 1
+        } while (read != buflen);
+#else
+        reg_writel(buflen - 1, BUFF_LEN);
         gurnard_busy_wait(host);
         readsl(host->data_base, buf, buflen >> 2);
-#endif
-
-#if 0
-        gurnard_busy_wait(host);
-        buflen>>=2;
-        while (buflen--)
-                *buf++ = readl(host->data_base);
 #endif
 }
 
@@ -286,12 +290,93 @@ static int gurnard_read_status(struct gurnard_nand_host *host)
         return status;
 }
 
+/**
+ * Compare the ECC we read back from the FPGA with the one that we've
+ * just read out of the oob. If they don't match, warn and try to
+ * correct things. If it is uncorrectable, this function will retun < 0
+ */
+static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
+                uint8_t *buf, uint8_t *oob, uint8_t *fpga_ecc)
+{
+        struct gurnard_nand_stack *stack = mtd->priv;
+        struct gurnard_nand_host *host = stack->host;
+        uint8_t *nand_ecc;
+        int i;
+        uint8_t calc_ecc[ECC_CALC_SIZE];
+
+        nand_ecc = &oob[mtd->ecclayout->eccpos[0]];
+
+#if 1
+        /* Check that the Linux ECC calculations match the FPGA ones */
+        //nand_ecc[0] ^= 0x1; // put a single bit error into the ecc we get back from the device
+        for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
+                __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], ECC_CHUNK_SIZE, 
+                                calc_ecc);
+                if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE], calc_ecc, 
+                                        ECC_CALC_SIZE) != 0) {
+                        dev_err(&host->pdev->dev, 
+                                "FPGA/Linux differ in ECC calc. 0x%llx/%d: "
+                                "0x%2.2x%2.2x%2.2x != 0x%2.2x%2.2x%2.2x\n",
+                                        addr, i * ECC_CALC_SIZE,
+                                        fpga_ecc[i * ECC_CALC_SIZE], 
+                                        fpga_ecc[i * ECC_CALC_SIZE + 1], 
+                                        fpga_ecc[i * ECC_CALC_SIZE + 2],
+                                        calc_ecc[0], calc_ecc[1], calc_ecc[2]);
+                        return -EINVAL;
+                }
+        }
+#endif
+
+        /* Insert a double bit fault */
+        //fpga_ecc[0] ^= 0x3;
+
+        if (memcmp(fpga_ecc, nand_ecc, mtd->ecclayout->eccbytes) == 0)
+                return 0;
+
+        dev_warn(&host->pdev->dev, "ECC Error at 0x%llx\n", addr);
+        /* Iterate over each 256 byte block checking if it is valid */
+        for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
+                int ret;
+                if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE], 
+                           &nand_ecc[i * ECC_CALC_SIZE], ECC_CALC_SIZE) == 0)
+                        continue;
+               
+                ret = __nand_correct_data(&buf[i * ECC_CHUNK_SIZE], 
+                                &nand_ecc[i * ECC_CALC_SIZE],
+                                &fpga_ecc[i * ECC_CALC_SIZE],
+                                ECC_CHUNK_SIZE);
+                if (ret < 0) {
+                        dev_err(&host->pdev->dev, 
+                                "Uncorrectable ECC error at 0x%llx:%d\n", 
+                                addr, i * ECC_CHUNK_SIZE);
+                        mtd->ecc_stats.failed++;
+                        return -EBADMSG;
+                } else if (ret > 0) {
+                        dev_warn(&host->pdev->dev, 
+                                 "Corrected %d ECC failures at 0x%llx:%d\n", 
+                                 ret, addr, i * ECC_CHUNK_SIZE);
+                        mtd->ecc_stats.corrected += ret;
+                } else
+                        dev_warn(&host->pdev->dev,
+                                 "Empty ECC correction at 0x%llx:%d\n",
+                                 addr, i * ECC_CHUNK_SIZE);
+
+                                 
+        }
+        return 0;
+}
+
+
 static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                 uint8_t *buf, uint8_t *oob, int max_len)
 {
         struct gurnard_nand_stack *stack = mtd->priv;
         struct gurnard_nand_host *host = stack->host;
         uint8_t addr[5];
+        uint32_t ecc[mtd->ecclayout->eccbytes / 4];
+        uint8_t test_oob[mtd->oobsize];
+        int ret = 0;
+        int i, len;
 
         if (from >= mtd->size)
                 return -EINVAL;
@@ -313,11 +398,14 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
         }
 #ifdef RAW_ACCESS_DEBUG
         printk("read: 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
-                        from, 
+                        from,
                         addr[4], addr[3], addr[2], addr[1], addr[0],
                         buf ? " data" : "", oob ? " oob" : "");
 #endif
 
+        /* We always do oob reads, just so that we can verify the ecc */
+        if (!oob)
+                oob = test_oob;
 
         gurnard_write_command(host, NAND_CMD_READ0);
         gurnard_write_address(host, addr, 5);
@@ -329,14 +417,29 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                 max_len -= mtd->writesize;
                 if (max_len < 0)
                         max_len = 0;
+
+                /* We've just finished reading the entire page,
+                 * so now read the ECC from the fpga so we
+                 * can compare later
+                 */
+                for (i = 0; i < mtd->ecclayout->eccbytes / 4; i++)
+                        ecc[i] = reg_readl(ECC);
         }
-        if (oob) {
-                gurnard_read_buf(host, (uint32_t *)oob,
-                                min((int)mtd->oobsize, max_len));
-        }
+
+        /* Reset the buffers for the OOB read, otherwise when we 
+         * go to read them back we get incorrect counts from BUFF_LEN
+         */
+        reg_writel(BIT_BUFF_CLEAR, CFG_SET);
+
+        len = min((int)mtd->oobsize, max_len);
+        gurnard_read_buf(host, (uint32_t *)oob, len);
+
+        if (buf && len == mtd->oobsize)
+                ret = gurnard_ecc_check(mtd, from, buf, oob, (uint8_t *)ecc);
+
         gurnard_select_chips(host, 0);
 
-        return 0;
+        return ret;
 }
 
 static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
@@ -411,7 +514,7 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         return ret;
 }
 
-static int gurnard_nand_erase_block(struct gurnard_nand_host *host, 
+static int gurnard_nand_erase_block(struct gurnard_nand_host *host,
                 loff_t block_addr)
 {
         char addr[3];
@@ -477,6 +580,8 @@ static int gurnard_nand_read(struct mtd_info *mtd, loff_t from, size_t len,
         struct gurnard_nand_stack *stack = mtd->priv;
         struct gurnard_nand_host *host = stack->host;
         uint64_t cur_addr = from;
+        int ret = 0;
+        struct mtd_ecc_stats stats;
 
         //printk("gurnard_nand_read: from=0x%llx len=0x%x\n", from, len);
 
@@ -495,14 +600,21 @@ static int gurnard_nand_read(struct mtd_info *mtd, loff_t from, size_t len,
                 return -EINVAL;
         }
 
+        stats = mtd->ecc_stats;
+
         while (cur_addr < from + len) {
-                gurnard_nand_read_page(mtd, cur_addr, buf, NULL, -1);
+                ret = gurnard_nand_read_page(mtd, cur_addr, buf, NULL, -1);
+                if (ret)
+                        break;
                 buf += mtd->writesize;
                 cur_addr += mtd->writesize;
         }
         *retlen = len;
 
-        return 0;
+        if (ret)
+                return ret;
+
+        return mtd->ecc_stats.corrected - stats.corrected ? -EUCLEAN : 0;
 }
 
 static int gurnard_nand_write_oob(struct mtd_info *mtd, loff_t to,
@@ -559,7 +671,7 @@ static int gurnard_nand_write_oob(struct mtd_info *mtd, loff_t to,
                 if (ops->mode == MTD_OOB_AUTO) {
                         oob = oobtmp;
                         memset(oobtmp, 0xff, sizeof(oobtmp));
-                        memcpy(&oobtmp[mtd->ecclayout->oobfree[0].offset], 
+                        memcpy(&oobtmp[mtd->ecclayout->oobfree[0].offset],
                                         ops->oobbuf, ops->ooblen);
                 } else
                         oob = ops->oobbuf;
@@ -598,6 +710,8 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
         uint8_t *buf, *oob;
         uint64_t len = 0;
         uint8_t oobtmp[mtd->oobsize];
+        int ret = 0;
+        struct mtd_ecc_stats stats;
 
         if (!ops->datbuf && !ops->oobbuf)
                 return -EINVAL;
@@ -654,13 +768,17 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
         }
         buf = ops->datbuf;
 
+        stats = mtd->ecc_stats;
+
         while (cur_addr < from + len) {
-                gurnard_nand_read_page(mtd, cur_addr, buf, oob, -1);
+                ret = gurnard_nand_read_page(mtd, cur_addr, buf, oob, -1);
+                if (ret)
+                        break;
                 if (buf)
                         buf += mtd->writesize;
                 if (ops->oobbuf && ops->mode == MTD_OOB_AUTO)
-                        memcpy(ops->oobbuf, 
-                               &oobtmp[mtd->ecclayout->oobfree[0].offset], 
+                        memcpy(ops->oobbuf,
+                               &oobtmp[mtd->ecclayout->oobfree[0].offset],
                                ops->ooblen);
                 cur_addr += mtd->writesize;
         }
@@ -670,7 +788,9 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
         if (oob)
                 ops->oobretlen = mtd->oobsize;
 
-        return 0;
+        if (ret)
+                return ret;
+        return mtd->ecc_stats.corrected - stats.corrected ? -EUCLEAN : 0;
 
 }
 
@@ -688,7 +808,7 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
         ret = gurnard_nand_read_page(mtd, offs, NULL, (uint8_t *)&oob, 4);
         if (ret)
                 return ret;
-#ifdef RAW_ACCESS_DEBUG
+#if 0 //def RAW_ACCESS_DEBUG
         if (oob != 0xffffffff)
                 printk("block_is_bad: 0x%llx=0x%x\n", offs, oob);
 #endif
@@ -714,7 +834,7 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
         uint8_t oob[mtd->oobsize];
         int ret = 0;
 
-        printk("gurnard_nand_write: to=0x%llx len=0x%x\n", to, len);
+        //printk("gurnard_nand_write: to=0x%llx len=0x%x\n", to, len);
 
         if (to + len > mtd->size)
                 return -EINVAL;
@@ -739,7 +859,7 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
                 cur_addr += mtd->writesize;
         }
         *retlen = cur_addr - to;
-        printk("nand_write done: %d 0x%llx\n", ret, cur_addr - to);
+        //printk("nand_write done: %d 0x%llx\n", ret, cur_addr - to);
 
         return ret;
 }
