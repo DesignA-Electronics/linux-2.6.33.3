@@ -181,7 +181,7 @@ static struct mtd_partition __initdata tiny_gurnard_nand_partition[] = {
 		.size	= SZ_256K,
 	},
 	{
-		.name	= "Bootloader_Environment",
+		.name	= "Environment",
 		.offset	= MTDPART_OFS_NXTBLK,
 		.size	= SZ_256K,
 	},
@@ -291,6 +291,25 @@ static struct platform_device tiny_gurnard_nand_device = {
 	.num_resources	= ARRAY_SIZE(fpga_nand_resources),
 };
 
+static struct sam9_smc_config __initdata tiny_gurnard_fpga_smc_config = {
+	.ncs_read_setup		= 2,
+	.nrd_setup		= 0,
+	.ncs_write_setup	= 2,
+	.nwe_setup		= 1,
+
+	.ncs_read_pulse		= 4,
+	.nrd_pulse		= 6,
+	.ncs_write_pulse	= 4,
+	.nwe_pulse		= 5,
+
+	.read_cycle		= 6,
+	.write_cycle		= 6,
+
+	.mode			= AT91_SMC_BAT_WRITE | AT91_SMC_DBW_32 |
+                                  AT91_SMC_EXNWMODE_DISABLE | AT91_SMC_TDFMODE,
+	.tdf_cycles		= 2,
+};
+
 static void __init tiny_gurnard_board_init(void)
 {
 #ifdef CONFIG_DEBUG_FS
@@ -307,6 +326,9 @@ static void __init tiny_gurnard_board_init(void)
 		ARRAY_SIZE(tiny_gurnard_spi_board_info));
         /* FPGA NAND */
 	platform_device_register(&tiny_gurnard_nand_device);
+
+        /* FPGA memory timings */
+	sam9_smc_configure(0, &tiny_gurnard_fpga_smc_config);
 
 #ifdef CONFIG_DEBUG_FS
         dir = debugfs_create_dir("fpga", NULL);
