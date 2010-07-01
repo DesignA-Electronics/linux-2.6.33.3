@@ -36,6 +36,13 @@ config ATMEL_PWM
 	  purposes including software controlled power-efficient backlights
 	  on LCD displays, motor control, and waveform generation.
 
+config AT91_ADC
+	tristate "AT91 ADC"
+	depends on ARCH_AT91
+	default n
+	help
+	    Provides a simple sysfs based interface to the AT91 SOC ADCs
+	    
 config ATMEL_TCLIB
 	bool "Atmel AT32/AT91 Timer/Counter Library"
 	depends on (AVR32 || ARCH_AT91)
