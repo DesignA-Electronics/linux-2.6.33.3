@@ -16,7 +16,6 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
-#include <linux/debugfs.h>
 
 #include <mach/hardware.h>
 
@@ -39,7 +38,7 @@
 
 #define FPGA_IRQ        AT91_PIN_PC11
 
-/* Take from 7.3 of document tiny_gurnard 06 */
+/* Taken from 7.3 of document tiny_gurnard 06 */
 #define FPGA_ROM_PHYS          AT91_CHIPSELECT_0
 #define FPGA_ROM_VIRT          (0xf0000000)
 #define FPGA_ROM_SIZE          0x1000
@@ -55,7 +54,7 @@
 #define FPGA_ID         FPGA_ROM_REG(0x00)
 #define FPGA_BUILD_DATE FPGA_ROM_REG(0x04)
 #define FPGA_EMULATION  FPGA_ROM_REG(0x08)
-#define FPGA_BUILD_TEXT FPGA_ROM_REG(0x400)
+#define FPGA_BUILD_TEXT FPGA_ROM_REG(0x100)
 
 #define FPGA_IRQ_REG(x) (*(volatile uint32_t *)(FPGA_IRQ_VIRT + (x)))
 #define FPGA_IER        FPGA_IRQ_REG(0x00)
@@ -102,7 +101,6 @@ static void tiny_gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
                 pr_err("Tiny Gurnard FPGA IRQ, but FPGA not programmed\n");
                 return;
         }
-        //printk("gurnard irq: %d\n", irq);
 
         do {
                 if (likely(pending)) {
@@ -117,14 +115,12 @@ static void tiny_gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
 static void tiny_gurnard_mask_irq(unsigned int irq)
 {
         int fpga_irq = (irq - BOARD_IRQ(0));
-        //printk("gurnard mask irq: %d %d\n", irq, fpga_irq);
         FPGA_IER &= ~(1 << fpga_irq);
 }
 
 static void tiny_gurnard_unmask_irq(unsigned int irq)
 {
         int fpga_irq = (irq - BOARD_IRQ(0));
-        //printk("gurnard unmask irq: %d %d\n", irq, fpga_irq);
         FPGA_IER |= 1 << fpga_irq;
 }
 
@@ -202,7 +198,8 @@ static struct mtd_partition __initdata tiny_gurnard_nand_partition[] = {
 	},
 };
 
-static struct mtd_partition * __init nand_partitions(int size, int *num_partitions)
+static struct mtd_partition * __init nand_partitions(int size, 
+                int *num_partitions)
 {
 	*num_partitions = ARRAY_SIZE(tiny_gurnard_nand_partition);
 	return tiny_gurnard_nand_partition;
@@ -236,7 +233,8 @@ static struct sam9_smc_config __initdata tiny_gurnard_nand_smc_config = {
 	.read_cycle		= 7,
 	.write_cycle		= 7,
 
-	.mode			= AT91_SMC_READMODE | AT91_SMC_WRITEMODE | AT91_SMC_EXNWMODE_DISABLE,
+	.mode			= AT91_SMC_READMODE | AT91_SMC_WRITEMODE | 
+                                  AT91_SMC_EXNWMODE_DISABLE,
 	.tdf_cycles		= 3,
 };
 
@@ -266,19 +264,19 @@ static struct spi_board_info tiny_gurnard_spi_board_info[] __initdata = {
 
 /* FPGA NAND access */
 static struct resource fpga_nand_resources[] = {
-	[0] = {
+	[0] = { /* Control registers */
 		.start	= FPGA_NAND_CTRL_PHYS,
 		.end	= (FPGA_NAND_CTRL_PHYS + 0x1000) - 1,
 		.flags	= IORESOURCE_MEM,
 	},
-        [1] = {
+        [1] = { /* Data registers */
                 .start  = FPGA_NAND_CTRL_PHYS + 0x00800000,
                 /* Make it a large (ie: 4k) window, so we can do stm/rdm
                  * commands for better speed */
                 .end    = FPGA_NAND_CTRL_PHYS + 0x00801000 - 1,
                 .flags  = IORESOURCE_MEM,
         },
-        [2] = {
+        [2] = { /* This is not actually used */
                 .start  = BOARD_IRQ(0),
                 .end    = BOARD_IRQ(0),
                 .flags  = IORESOURCE_IRQ,
@@ -310,36 +308,86 @@ static struct sam9_smc_config __initdata tiny_gurnard_fpga_smc_config = {
 	.tdf_cycles		= 2,
 };
 
-static void __init tiny_gurnard_board_init(void)
+/* Placeholder device for us to register sysfs files under */
+static struct platform_device tiny_gurnard_fpga_device = {
+	.name		= "gurnard_fpga",
+};
+
+/* FPGA Register display functions */
+#define FPGA_REG_SHOW(r) \
+static ssize_t r##_show(struct device *dev,                             \
+                        struct device_attribute *attr, char *buf)       \
+{                                                                       \
+        return sprintf(buf, "0x%x\n", FPGA_##r);                        \
+}                                                                       \
+static DEVICE_ATTR(r, S_IRUGO, r##_show, NULL);
+
+FPGA_REG_SHOW(IER);
+FPGA_REG_SHOW(IFR);
+FPGA_REG_SHOW(ID);
+FPGA_REG_SHOW(EMULATION);
+FPGA_REG_SHOW(BUILD_DATE);
+
+static ssize_t fpga_build_show(struct device *dev, 
+                struct device_attribute *attr, char *buf)
 {
-#ifdef CONFIG_DEBUG_FS
-        struct dentry *dir;
-#endif
-	/* Serial */
-	at91_add_device_serial();
-	/* Ethernet */
-	at91_add_device_eth(&tiny_gurnard_macb_data);
-	/* NAND */
-	tiny_gurnard_add_device_nand();
+        return sprintf(buf, "%s\n", (char *)&FPGA_BUILD_TEXT);
+}
+static DEVICE_ATTR(BUILD, S_IRUGO, fpga_build_show, NULL);
+
+static ssize_t fpga_build_date_show(struct device *dev,
+                struct device_attribute *attr, char *buf)
+{
+        int year = (FPGA_BUILD_DATE & 0xffff0000) >> 16;
+        int month = (FPGA_BUILD_DATE & 0xff00) >> 8;
+        int day = (FPGA_BUILD_DATE & 0xff);
+        return sprintf(buf, "%4.4d-%2.2d-%2.2d\n", year, month, day);
+}
+static DEVICE_ATTR(BUILD_DATE_STR, S_IRUGO, fpga_build_date_show, NULL);
+
+static const struct attribute *fpga_attrs[] = {
+        &dev_attr_IER.attr,
+        &dev_attr_IFR.attr,
+        &dev_attr_ID.attr,
+        &dev_attr_EMULATION.attr,
+        &dev_attr_BUILD.attr,
+        &dev_attr_BUILD_DATE.attr,
+        &dev_attr_BUILD_DATE_STR.attr,
+        NULL,
+};
+
+static const struct attribute_group fpga_attr_group = {
+        .attrs = (struct attribute **)fpga_attrs,
+};
+
+static void __init tiny_gurnard_fpga_init(void)
+{
         /* FPGA attached to the SPI bus */
 	at91_add_device_spi(tiny_gurnard_spi_board_info,
 		ARRAY_SIZE(tiny_gurnard_spi_board_info));
+
+        /* FPGA platform dev, for us to attach SYSFS files to */
+	platform_device_register(&tiny_gurnard_fpga_device);
         /* FPGA NAND */
 	platform_device_register(&tiny_gurnard_nand_device);
 
         /* FPGA memory timings */
 	sam9_smc_configure(0, &tiny_gurnard_fpga_smc_config);
 
-#ifdef CONFIG_DEBUG_FS
-        dir = debugfs_create_dir("fpga", NULL);
-        if (!dir)
-                return;
-        debugfs_create_x32("IER", S_IRUGO | S_IWUSR, dir, (uint32_t *)&FPGA_IER);
-        debugfs_create_x32("IFR", S_IRUGO | S_IWUSR, dir, (uint32_t *)&FPGA_IFR);
-        debugfs_create_x32("ID", S_IRUGO, dir, (uint32_t *)&FPGA_ID);
-        debugfs_create_x32("BUILD_DATE", S_IRUGO, dir, (uint32_t *)&FPGA_BUILD_DATE);
-        debugfs_create_x32("EMULATION", S_IRUGO, dir, (uint32_t *)&FPGA_EMULATION);
-#endif
+        sysfs_create_group(&tiny_gurnard_fpga_device.dev.kobj, 
+                        &fpga_attr_group);
+}
+
+static void __init tiny_gurnard_board_init(void)
+{
+	/* Serial */
+	at91_add_device_serial();
+	/* Ethernet */
+	at91_add_device_eth(&tiny_gurnard_macb_data);
+	/* NAND */
+	tiny_gurnard_add_device_nand();
+        /* FPGA */
+        tiny_gurnard_fpga_init();
 }
 
 MACHINE_START(TINY_GURNARD, "Tiny Gurnard")
