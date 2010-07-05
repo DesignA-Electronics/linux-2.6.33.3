@@ -864,6 +864,43 @@ static void __init at91_add_device_rtc(void)
 static void __init at91_add_device_rtc(void) {}
 #endif
 
+/* --------------------------------------------------------------------
+ *  ADC
+ * -------------------------------------------------------------------- */
+#if defined(CONFIG_AT91_ADC) || defined(CONFIG_AT91_ADC_MODULE)
+static struct at91_adc_data adc_data;
+
+static struct resource adc_resources[] = {
+        [0] = {
+                .start  = AT91SAM9G45_BASE_TSC,
+                .end    = AT91SAM9G45_BASE_TSC + 0x100,
+                .flags  = IORESOURCE_MEM,
+        },
+        [1] = {
+                .start  = AT91SAM9G45_ID_TSC,
+                .end    = AT91SAM9G45_ID_TSC,
+                .flags  = IORESOURCE_IRQ,
+        },
+};
+
+static struct  platform_device at91sam9g45_adc_device = {
+        .name           = "at91_adc",
+        .id             = -1,
+        .resource       = adc_resources,
+        .num_resources  = ARRAY_SIZE(adc_resources),
+	.dev        = {
+                .platform_data  = &adc_data,
+	},
+};
+
+void __init at91_add_device_adc(struct at91_adc_data *data)
+{
+        adc_data = *data;
+        platform_device_register(&at91sam9g45_adc_device);
+}
+#else
+void __init at91_add_device_adc(struct at91_adc_data *data) {}
+#endif
 
 /* --------------------------------------------------------------------
  *  Touchscreen

@@ -1,3 +1,15 @@
+/*
+ * drivers/misc/at91_adc.c
+ *
+ *  Copyright (C) 2009 Bluewater Systems Ltd
+ *  Author: Andre Renaud <andre@bluewatersys.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ */
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -21,26 +33,26 @@ struct at91_adc {
         struct device *dev;
         int irq;
         int adc_vals[4];
-
-	int needs_completion;
         struct completion converted;
 
         struct at91_adc_data *data;
 };
 
-
 #define at91_adc_read(adc,reg)      __raw_readl((adc)->base + (reg))
 #define at91_adc_write(adc,reg,val) __raw_writel((val), (adc)->base + (reg))
 
-static void __devinit at91_adc_hwinit(struct at91_adc *adc)
+static void __init at91_adc_hwinit(struct at91_adc *adc)
 {
         int i;
-        at91_adc_write(adc, AT91_ADC_CR, AT91_ADC_SWRST); /* Reset the ADC system */
+	
+	/* Reset the ADC system */
+        at91_adc_write(adc, AT91_ADC_CR, AT91_ADC_SWRST);
+	
         /* Set up the prescale, startup & sample times */
-        at91_adc_write(adc, AT91_ADC_MR, (adc->data->prescale << 8 |
-					  adc->data->startup << 16 |
-					  adc->data->sample << 24  |
-					  adc->data->low_res << 4));
+        at91_adc_write(adc, AT91_ADC_MR, (adc->data->prescale << 8 | 
+					  adc->data->startup << 16 | 
+					  adc->data->sample << 24));
+		       
         /* Enable all the interrupts */
         for (i = 0; i < 4; i++)
                 if (adc->data->gpios[i] >= 0) {
@@ -55,65 +67,56 @@ static irqreturn_t at91_adc_irq(int irq, void *dev_id)
         int i;
         for (i = 0; i < 4; i++) {
                 if (at91_adc_read (adc, AT91_ADC_SR) & AT91_ADC_EOC(i)) {
-                        adc->adc_vals[i] = at91_adc_read(adc, AT91_ADC_CHR(i) & AT91_ADC_DATA);
+                        adc->adc_vals[i] = at91_adc_read(adc, AT91_ADC_CDR(i) &
+							 AT91_ADC_CDR_MASK);
                 }
         }
-
-	if (adc->needs_completion)
-		complete(&adc->converted);
+	
+        complete(&adc->converted);
         return IRQ_HANDLED;
 }
 
 int at91_adc_get_value(struct at91_adc *adc, int channel)
 {
         init_completion(&adc->converted);
-	adc->needs_completion = 1;
+        
+	/* Enable the channel */
+        at91_adc_write(adc, AT91_ADC_CHER, 1 << channel);
+	
+	/* Start the conversion */
+        at91_adc_write(adc, AT91_ADC_CR, AT91_ADC_START);
 
-        at91_adc_write(adc, AT91_ADC_CHER, 1 << channel); /* Enable the channel */
-        at91_adc_write(adc, AT91_ADC_CR, AT91_ADC_START); /* Start the conversion */
+        wait_for_completion(&adc->converted);
 
-        wait_for_completion_interruptible(&adc->converted);
-	adc->needs_completion = 0;
-
+	/* Disable the channel */
+        at91_adc_write(adc, AT91_ADC_CHDR, 1 << channel);
         return adc->adc_vals[channel];
 }
 EXPORT_SYMBOL(at91_adc_get_value);
 
-int at91_adc_get_value_atomic(struct at91_adc *adc, int channel)
-{
-	adc->needs_completion = 0;
-
-#if 0
-	if (!(at91_adc_read(adc, AT91_ADC_SR) & (1 << channel)))
-		printk(KERN_ERR "sample on channel %d is not complete\n",
-		       channel);
-#endif
-
-	adc->adc_vals[channel] = at91_adc_read(adc, AT91_ADC_CHR(channel) &
-								AT91_ADC_DATA);
-
-	at91_adc_write(adc, AT91_ADC_CHER, 1 << channel);
-	at91_adc_write(adc, AT91_ADC_CR, AT91_ADC_START);
-
-	return adc->adc_vals[channel];
-}
-EXPORT_SYMBOL(at91_adc_get_value_atomic);
-
 #define ADC_READ_ATTR(x)						\
-        static ssize_t at91_adc_read_value_##x (struct device *dev,     \
-                        struct device_attribute *attr, char *buf)       \
+        static ssize_t at91_adc_read_value_##x(struct device *dev,	\
+					       struct device_attribute *attr, \
+					       char *buf)		\
         {                                                               \
                 struct at91_adc *adc = dev_get_drvdata(dev);            \
                 if (adc->data->gpios[x] < 0)                            \
                         return sprintf (buf, "-1\n");                   \
                 return sprintf(buf, "0x%x\n", at91_adc_get_value (adc, x)); \
         }                                                               \
-        static DEVICE_ATTR(adc##x, S_IRUSR | S_IRUGO, at91_adc_read_value_##x, NULL);
+        static DEVICE_ATTR(adc##x, S_IRUSR | S_IRUGO,			\
+			   at91_adc_read_value_##x, NULL);
 
 ADC_READ_ATTR(0);
 ADC_READ_ATTR(1);
 ADC_READ_ATTR(2);
 ADC_READ_ATTR(3);
+#ifdef CONFIG_ARCH_AT91SAM9G45
+ADC_READ_ATTR(4);
+ADC_READ_ATTR(5);
+ADC_READ_ATTR(6);
+ADC_READ_ATTR(7);
+#endif
 
 static struct attribute *at91_adc_attrs[] = {
         &dev_attr_adc0.attr,
@@ -121,14 +124,21 @@ static struct attribute *at91_adc_attrs[] = {
         &dev_attr_adc2.attr,
         &dev_attr_adc3.attr,
 
-        NULL
+#ifdef CONFIG_ARCH_AT91SAM9G45
+        &dev_attr_adc4.attr,
+        &dev_attr_adc5.attr,
+        &dev_attr_adc6.attr,
+        &dev_attr_adc7.attr,
+#endif
+
+        NULL,
 };
 
 static const struct attribute_group at91_adc_sysfs_files = {
         .attrs = at91_adc_attrs,
 };
 
-static int __devinit at91_adc_probe(struct platform_device *pdev)
+static int __init at91_adc_probe(struct platform_device *pdev)
 {
         struct resource *res, *irq_res;
         int rc;
@@ -141,7 +151,7 @@ static int __devinit at91_adc_probe(struct platform_device *pdev)
         if (!irq_res)
                 return -ENXIO;
 
-        if (!request_mem_region(res->start, res->end - res->start + 1,
+        if (!request_mem_region(res->start, res->end - res->start + 1, 
                                 "at91_adc"))
                 return -EBUSY;
 
@@ -153,7 +163,6 @@ static int __devinit at91_adc_probe(struct platform_device *pdev)
         adc->irq = irq_res->start;
         adc->dev = &pdev->dev;
         adc->data = (struct at91_adc_data *)pdev->dev.platform_data;
-	adc->needs_completion = 0;
 
         adc->base = ioremap(res->start, res->end - res->start + 1);
         if (!adc->base) {
@@ -161,7 +170,11 @@ static int __devinit at91_adc_probe(struct platform_device *pdev)
                 goto fail1;
         }
 
+#ifdef CONFIG_ARCH_AT91SAM9G45
+	adc->clk = clk_get(NULL, "tsc_clk");
+#else
         adc->clk = clk_get(NULL, "adc_clk");
+#endif
         if (IS_ERR(adc->clk)) {
                 dev_err(adc->dev, "no clock defined\n");
                 rc = -ENODEV;
@@ -169,7 +182,7 @@ static int __devinit at91_adc_probe(struct platform_device *pdev)
         }
         clk_enable(adc->clk);            /* enable peripheral clock */
 
-        rc = request_irq(adc->irq, at91_adc_irq, IRQF_DISABLED,
+        rc = request_irq(adc->irq, at91_adc_irq, IRQF_DISABLED, 
                         pdev->name, adc);
         if (rc != 0) {
                 dev_err(adc->dev, "cannot claim IRQ\n");
@@ -181,7 +194,7 @@ static int __devinit at91_adc_probe(struct platform_device *pdev)
                 goto fail4;
 
         platform_set_drvdata(pdev, adc);
-
+       
         at91_adc_hwinit (adc);
         dev_info(adc->dev, "AT91 ADC driver.\n");
         return 0;
@@ -201,7 +214,7 @@ fail0:
         return rc;
 }
 
-static int __devexit at91_adc_remove(struct platform_device *pdev)
+static int __exit at91_adc_remove(struct platform_device *pdev)
 {
         struct at91_adc *adc = platform_get_drvdata(pdev);
         struct resource *res;
@@ -234,7 +247,7 @@ static int at91_adc_suspend(struct platform_device *pdev, pm_message_t mesg)
 static int at91_adc_resume(struct platform_device *pdev)
 {
         struct at91_adc *adc = platform_get_drvdata(pdev);
-
+	
         return clk_enable(adc->clk);
 }
 
@@ -245,10 +258,9 @@ static int at91_adc_resume(struct platform_device *pdev)
 
 static struct platform_driver at91_adc_driver = {
         .probe          = at91_adc_probe,
-        .remove         = __devexit_p(at91_adc_remove),
+        .remove         = __exit_p(at91_adc_remove),
         .suspend        = at91_adc_suspend,
 	.resume		= at91_adc_resume,
-        .remove         = at91_adc_remove,
         .driver         = {
                 .name   = "at91_adc",
                 .owner  = THIS_MODULE,
@@ -271,3 +283,4 @@ module_exit(at91_adc_exit);
 MODULE_DESCRIPTION("AT91 ADC Driver");
 MODULE_AUTHOR("Andre Renaud <andre@bluewatersys.com>");
 MODULE_LICENSE("GPL");
+

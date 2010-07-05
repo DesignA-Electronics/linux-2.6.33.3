@@ -205,6 +205,22 @@ struct at91_tsadcc_data {
 };
 extern void __init at91_add_device_tsadcc(struct at91_tsadcc_data *data);
 
+/*
+ * ADC
+ */
+struct at91_adc_data {
+#if defined(CONFIG_ARCH_AT91SAM9G45)
+        s32      gpios[8];
+#else
+        s32      gpios[4];
+#endif	
+        u32      prescale;
+        u32      startup;
+        u32      sample;
+};
+extern void __init at91_add_device_adc(struct at91_adc_data *data);
+
+
 /* CAN */
 struct at91_can_data {
 	void (*transceiver_switch)(int on);
