@@ -113,17 +113,6 @@ struct atmel_nand_data {
 };
 extern void __init at91_add_device_nand(struct atmel_nand_data *data);
 
-/* ADC */
-struct at91_adc_data {
-       s32      gpios[4];
-       u32      prescale;
-       u32      startup;
-       u32      sample;
-	u32	low_res;
-};
-
-extern void __init at91_add_device_adc(struct at91_adc_data *data);
-
  /* I2C*/
 #if defined(CONFIG_ARCH_AT91SAM9G45)
 extern void __init at91_add_device_i2c(short i2c_id, struct i2c_board_info *devices, int nr_devices);
