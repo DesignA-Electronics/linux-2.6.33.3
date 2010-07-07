@@ -248,6 +248,22 @@ static struct at91_tsadcc_data hammerhead_tsadcc_data = {
 static struct ac97c_platform_data hammerhead_ac97_data = {
 };
 
+/*
+ * A/D
+ */
+static struct at91_adc_data hammerhead_adc_data = {
+        .gpios[0] = AT91_PIN_PD26,
+        .gpios[1] = AT91_PIN_PD27,
+        .gpios[2] = -1,
+        .gpios[3] = -1,
+		.gpios[4] = -1,
+		.gpios[5] = -1,
+		.gpios[6] = -1,
+		.gpios[7] = -1,
+        .prescale = 4,
+        .startup = 12,
+        .sample = 12,
+};
 
 static struct i2c_board_info __initdata hammerhead_i2c_devices[] = {
 	{
@@ -274,6 +290,8 @@ static void __init hammerhead_board_init(void)
 	/* Audio */
         /* FIXME: Don't have record pins here */
 	at91_add_device_ssc(AT91SAM9G45_ID_SSC0, ATMEL_SSC_TX);
+	/* adc */
+	at91_add_device_adc(&hammerhead_adc_data);
 #if 0
 	/* LCD Controller */
 	at91_add_device_lcdc(&hammerhead_lcdc_data);
