@@ -265,12 +265,16 @@ static struct at91_adc_data hammerhead_adc_data = {
         .sample = 12,
 };
 
-static struct i2c_board_info __initdata hammerhead_i2c_devices[] = {
+static struct i2c_board_info __initdata hammerhead_i2c0_devices[] = {
 	{
 		I2C_BOARD_INFO("tlv320aic23", 0x1a),
         },
 };
 
+static struct i2c_board_info __initdata hammerhead_i2c1_devices[] = {
+	{
+        },
+};
 
 static void __init hammerhead_board_init(void)
 {
@@ -286,7 +290,8 @@ static void __init hammerhead_board_init(void)
 	/* NAND */
 	hammerhead_add_device_nand();
 	/* I2C */
-	at91_add_device_i2c(0, hammerhead_i2c_devices, ARRAY_SIZE(hammerhead_i2c_devices));
+	at91_add_device_i2c(0, hammerhead_i2c0_devices, ARRAY_SIZE(hammerhead_i2c0_devices));
+	at91_add_device_i2c(1, hammerhead_i2c1_devices, ARRAY_SIZE(hammerhead_i2c1_devices));
 	/* Audio */
         /* FIXME: Don't have record pins here */
 	at91_add_device_ssc(AT91SAM9G45_ID_SSC0, ATMEL_SSC_TX);
