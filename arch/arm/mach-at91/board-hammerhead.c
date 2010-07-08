@@ -91,7 +91,7 @@ static struct usba_platform_data __initdata hammerhead_usba_udc_data = {
 static struct at91_eth_data __initdata hammerhead_macb_data = {
 	/*.phy_irq_pin	= AT91_PIN_PD5,*/
 	.is_rmii	= 1,
-        .phy_mask       = ~(1 << 27), // Phy 0x1b
+	.phy_mask	= ~(1 << 0x01), /* LAN8720 Phy Address = 0x01 */
 };
 
 
@@ -115,9 +115,29 @@ static struct mtd_partition __initdata hammerhead_nand_partition[] = {
 		.size	= SZ_256K,
 	},
 	{
-		.name	= "Kernel",
+		.name	= "Reserved",
 		.offset	= MTDPART_OFS_NXTBLK,
-		.size	= SZ_4M,
+		.size	= SZ_256K,
+	},
+	{
+		.name	= "Fpga1",
+		.offset	= MTDPART_OFS_NXTBLK,
+		.size	= SZ_8M,
+	},
+	{
+		.name	= "Fpga2",
+		.offset	= MTDPART_OFS_NXTBLK,
+		.size	= SZ_8M,
+	},
+	{
+		.name	= "Kernel1",
+		.offset	= MTDPART_OFS_NXTBLK,
+		.size	= SZ_16M,
+	},
+	{
+		.name	= "Kernel2",
+		.offset	= MTDPART_OFS_NXTBLK,
+		.size	= SZ_16M,
 	},
 	{
 		.name	= "Filesystem",
