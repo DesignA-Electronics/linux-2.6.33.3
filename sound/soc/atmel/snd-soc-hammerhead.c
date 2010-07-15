@@ -37,7 +37,7 @@
 #include <mach/hardware.h>
 #include <mach/cpu.h>
 
-#include "../codecs/tlv320aic23.h"
+#include "../codecs/tlv320aic26.h"
 #include "atmel-pcm.h"
 #include "atmel_ssc_dai.h"
 
@@ -147,21 +147,12 @@ static struct snd_soc_ops hammerhead_ops = {
 
 static const struct snd_soc_dapm_widget hammerhead_dapm_widgets[] = {
 		SND_SOC_DAPM_HP("Headphone Jack", NULL),
-		SND_SOC_DAPM_LINE("Line Out", NULL),
-		SND_SOC_DAPM_LINE("Line In", NULL),
 		SND_SOC_DAPM_MIC("Mic Jack", NULL),
 };
 
 static const struct snd_soc_dapm_route intercon[] = {
 		{"Headphone Jack", NULL, "LHPOUT"},
 		{"Headphone Jack", NULL, "RHPOUT"},
-
-		{"Line Out", NULL, "LOUT"},
-		{"Line Out", NULL, "ROUT"},
-
-		{"LLINEIN", NULL, "Line In"},
-		{"RLINEIN", NULL, "Line In"},
-
 		{"MICIN", NULL,	"Mic Jack"},
 };
 
@@ -177,8 +168,6 @@ static int hammerhead_tlv320_init(struct snd_soc_codec *codec)
 	snd_soc_dapm_add_routes(codec, intercon, ARRAY_SIZE(intercon));
 
 	snd_soc_dapm_enable_pin(codec, "Headphone Jack");
-	snd_soc_dapm_enable_pin(codec, "Line Out");
-	snd_soc_dapm_enable_pin(codec, "Line In");
 	snd_soc_dapm_enable_pin(codec, "Mic Jack");
 	printk("Socdev: %p\n", codec->socdev);
 
@@ -188,24 +177,24 @@ static int hammerhead_tlv320_init(struct snd_soc_codec *codec)
 }
 
 static struct snd_soc_dai_link hammerhead_dai = {
-		.name		= "tlv320aic23",
-				.stream_name	= "TLV320aic23b PCM",
-				.cpu_dai	= &atmel_ssc_dai[0],
-				.codec_dai	= &tlv320aic23_dai,
-				.init		= hammerhead_tlv320_init,
-				.ops		= &hammerhead_ops,
+	.name		= "tlv320aic26",
+	.stream_name	= "TLV320aic26 PCM",
+	.cpu_dai	= &atmel_ssc_dai[0],
+	.codec_dai	= &aic26_dai,
+	.init		= hammerhead_tlv320_init,
+	.ops		= &hammerhead_ops,
 };
 
 static struct snd_soc_card snd_soc_hammerhead = {
-		.name		= "Hammerhead",
-				.platform	= &atmel_soc_platform,
-				.dai_link	= &hammerhead_dai,
-				.num_links	= 1,
+	.name		= "Hammerhead",
+	.platform	= &atmel_soc_platform,
+	.dai_link	= &hammerhead_dai,
+	.num_links	= 1,
 };
 
 static struct snd_soc_device hammerhead_snd_devdata = {
-		.card		= &snd_soc_hammerhead,
-				.codec_dev	= &soc_codec_dev_tlv320aic23,
+	.card		= &snd_soc_hammerhead,
+	.codec_dev	= &aic26_soc_codec_dev,
 };
 
 static struct platform_device *hammerhead_snd_device;
@@ -265,11 +254,11 @@ static int __init hammerhead_init(void)
 	pr_info("hammerhead_audio: clock = %dhz\n", pck0_rate);
 	return 0;
 
-	fail_clk_set_rate:
+fail_clk_set_rate:
 	clk_put(pck0_clk);
-	fail_pck0:
+fail_pck0:
 	clk_put(pll_clk);
-	fail:
+fail:
 	return ret;
 }
 

@@ -45,11 +45,21 @@
 #include "sam9_smc.h"
 #include "generic.h"
 
+#define PWR_HOLD_GPIO	AT91_PIN_PD10
+
+static void hammerhead_poweroff(void)
+{
+	at91_sys_write(AT91_SHDW_CR, AT91_SHDW_KEY | AT91_SHDW_SHDW);
+	at91_set_gpio_output(PWR_HOLD_GPIO, 0);
+}
 
 static void __init hammerhead_map_io(void)
 {
 	/* Initialize processor: 12.000 MHz crystal */
 	at91sam9g45_initialize(12000000);
+
+	/* Override power off */
+	pm_power_off = hammerhead_poweroff;
 
 	/* DGBU on ttyS0. (Rx & Tx only) */
 	at91_register_uart(0, 0, 0);
@@ -287,7 +297,6 @@ static struct at91_adc_data hammerhead_adc_data = {
 
 static struct i2c_board_info __initdata hammerhead_i2c0_devices[] = {
 	{
-		I2C_BOARD_INFO("tlv320aic23", 0x1a),
         },
 };
 
@@ -295,6 +304,56 @@ static struct i2c_board_info __initdata hammerhead_i2c1_devices[] = {
 	{
         },
 };
+
+static struct spi_board_info hammerhead_spi_devices[] = {
+	{
+		.modalias	= "tlv320aic26",
+		.chip_select	= 0,
+		.bus_num	= 0,
+		.max_speed_hz	= 20 * 1000 * 1000,
+	},
+};
+
+/*
+ * GPIO Buttons
+ */
+
+#if defined(CONFIG_KEYBOARD_GPIO) || defined(CONFIG_KEYBOARD_GPIO_MODULE)
+static struct gpio_keys_button hammerhead_buttons[] = {
+	{
+		.type	= EV_PWR,
+		.code	= KEY_POWER,
+		.gpio	= AT91_PIN_PC9,
+		.desc	= "Power Button",
+		.wakeup = 1,
+		.active_low = 1,
+	},
+};
+
+static struct gpio_keys_platform_data hammerhead_button_data = {
+	.buttons	= hammerhead_buttons,
+	.nbuttons	= ARRAY_SIZE(hammerhead_buttons),
+};
+
+static struct platform_device hammerhead_button_device = {
+	.name		= "gpio-keys",
+	.id		= -1,
+	.num_resources	= 0,
+	.dev		= {
+		.platform_data	= &hammerhead_button_data,
+	}
+};
+
+static void __init hammerhead_add_device_buttons(void)
+{
+	at91_set_GPIO_periph(AT91_PIN_PC9, 1);	/* user push button, pull up enabled */
+	at91_set_deglitch(AT91_PIN_PC9, 1);
+
+	platform_device_register(&hammerhead_button_device);
+}
+#else
+static void __init hammerhead_add_device_buttons(void) {}
+#endif
 
 static void __init hammerhead_board_init(void)
 {
@@ -312,6 +371,8 @@ static void __init hammerhead_board_init(void)
 	/* I2C */
 	at91_add_device_i2c(0, hammerhead_i2c0_devices, ARRAY_SIZE(hammerhead_i2c0_devices));
 	at91_add_device_i2c(1, hammerhead_i2c1_devices, ARRAY_SIZE(hammerhead_i2c1_devices));
+	/* SPI */
+	at91_add_device_spi(hammerhead_spi_devices, ARRAY_SIZE(hammerhead_spi_devices));
 	/* Audio */
         /* FIXME: Don't have record pins here */
 	at91_add_device_ssc(AT91SAM9G45_ID_SSC0, ATMEL_SSC_TX);
@@ -323,6 +384,8 @@ static void __init hammerhead_board_init(void)
 	/* Touch Screen */
 	at91_add_device_tsadcc(&hammerhead_tsadcc_data);
 #endif
+	/* GPIO keys */
+	hammerhead_add_device_buttons();
 }
 
 MACHINE_START(HAMMERHEAD, "Hammerhead")

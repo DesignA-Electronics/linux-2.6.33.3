@@ -63,7 +63,7 @@ config SND_AT91_SOC_HAMMERHEAD
     tristate "SoC Audio support for Hammerhead board"
     depends on ARCH_AT91 && MACH_HAMMERHEAD && SND_ATMEL_SOC
     select SND_ATMEL_SOC_SSC
-    select SND_SOC_TLV320AIC23
+    select SND_SOC_TLV320AIC26
         select ATMEL_SSC
     help
       Say Y here to support sound on Hammerhead board.
