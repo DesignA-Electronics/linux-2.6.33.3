@@ -36,7 +36,14 @@
 #include "sam9_smc.h"
 #include "generic.h"
 
-#define FPGA_IRQ        AT91_PIN_PC11
+/**
+ * In rev0 this was on PC11
+ * #define FPGA_IRQ        AT91_PIN_PC11
+ */
+/**
+ * In rev1 we are on PD18, which in periph B mode is the external IRQ
+ */
+#define FPGA_IRQ        AT91SAM9G45_ID_IRQ0
 
 /* Taken from 7.3 of document tiny_gurnard 06 */
 #define FPGA_ROM_PHYS          AT91_CHIPSELECT_0
@@ -150,7 +157,7 @@ static void __init tiny_gurnard_init_irq(void)
                 set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
         }
 
-        set_irq_type(FPGA_IRQ, IRQ_TYPE_EDGE_BOTH);
+        set_irq_type(FPGA_IRQ, IRQ_TYPE_LEVEL_LOW);
         set_irq_chained_handler(FPGA_IRQ, tiny_gurnard_irq_handler);
 }
 
@@ -160,6 +167,23 @@ static void __init tiny_gurnard_init_irq(void)
 static struct at91_eth_data __initdata tiny_gurnard_macb_data = {
 	.is_rmii	= 1,
         .phy_mask       = ~(1 << 31), // Phy 0x1f
+};
+
+/**
+ * Board detection ADC
+ */
+static struct at91_adc_data tiny_gurnard_adc_data = {
+        .gpios[0] = -1,
+        .gpios[1] = AT91_PIN_PD21,
+        .gpios[2] = -1,
+        .gpios[3] = -1,
+        .gpios[4] = -1,
+        .gpios[5] = -1,
+        .gpios[6] = -1,
+        .gpios[7] = -1,
+        .prescale = 4,
+        .startup = 12,
+        .sample = 12,
 };
 
 /*
@@ -198,7 +222,7 @@ static struct mtd_partition __initdata tiny_gurnard_nand_partition[] = {
 	},
 };
 
-static struct mtd_partition * __init nand_partitions(int size, 
+static struct mtd_partition * __init nand_partitions(int size,
                 int *num_partitions)
 {
 	*num_partitions = ARRAY_SIZE(tiny_gurnard_nand_partition);
@@ -233,7 +257,7 @@ static struct sam9_smc_config __initdata tiny_gurnard_nand_smc_config = {
 	.read_cycle		= 7,
 	.write_cycle		= 7,
 
-	.mode			= AT91_SMC_READMODE | AT91_SMC_WRITEMODE | 
+	.mode			= AT91_SMC_READMODE | AT91_SMC_WRITEMODE |
                                   AT91_SMC_EXNWMODE_DISABLE,
 	.tdf_cycles		= 3,
 };
@@ -328,7 +352,7 @@ FPGA_REG_SHOW(ID);
 FPGA_REG_SHOW(EMULATION);
 FPGA_REG_SHOW(BUILD_DATE);
 
-static ssize_t fpga_build_show(struct device *dev, 
+static ssize_t fpga_build_show(struct device *dev,
                 struct device_attribute *attr, char *buf)
 {
         return sprintf(buf, "%s\n", (char *)&FPGA_BUILD_TEXT);
@@ -362,6 +386,8 @@ static const struct attribute_group fpga_attr_group = {
 
 static void __init tiny_gurnard_fpga_init(void)
 {
+        /* FPGA IRQ Needs to be in periph B mode */
+        at91_set_B_periph(AT91_PIN_PD18, 1);
         /* FPGA attached to the SPI bus */
 	at91_add_device_spi(tiny_gurnard_spi_board_info,
 		ARRAY_SIZE(tiny_gurnard_spi_board_info));
@@ -374,7 +400,10 @@ static void __init tiny_gurnard_fpga_init(void)
         /* FPGA memory timings */
 	sam9_smc_configure(0, &tiny_gurnard_fpga_smc_config);
 
-        sysfs_create_group(&tiny_gurnard_fpga_device.dev.kobj, 
+        /* Board detect ADC */
+        at91_add_device_adc(&tiny_gurnard_adc_data);
+
+        sysfs_create_group(&tiny_gurnard_fpga_device.dev.kobj,
                         &fpga_attr_group);
 }
 
