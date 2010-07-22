@@ -99,6 +99,11 @@ static void __init tiny_gurnard_map_io(void)
         iotable_init(fpga_io_desc, ARRAY_SIZE(fpga_io_desc));
 }
 
+/**
+ * FPGA interrupt counter
+ */
+uint32_t fpga_irq_count = 0;
+
 static void tiny_gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
         uint32_t pending = FPGA_IFR;
@@ -108,6 +113,8 @@ static void tiny_gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
                 pr_err("Tiny Gurnard FPGA IRQ, but FPGA not programmed\n");
                 return;
         }
+
+        fpga_irq_count++;
 
         do {
                 if (likely(pending)) {
@@ -184,6 +191,16 @@ static struct at91_adc_data tiny_gurnard_adc_data = {
         .prescale = 4,
         .startup = 12,
         .sample = 12,
+};
+
+/* LEDS */
+static struct gpio_led tiny_gurnard_leds[] = {
+        {	/* power LED */
+                .name			= "heartbeat",
+                .gpio			= AT91_PIN_PB27,
+                .active_low		= 1,
+                .default_trigger	= "heartbeat",
+        },
 };
 
 /*
@@ -352,6 +369,13 @@ FPGA_REG_SHOW(ID);
 FPGA_REG_SHOW(EMULATION);
 FPGA_REG_SHOW(BUILD_DATE);
 
+static ssize_t fpga_irq_count_show(struct device *dev,
+                struct device_attribute *attr, char *buf)
+{
+        return sprintf(buf, "%d\n", fpga_irq_count);
+}
+static DEVICE_ATTR(irq_count, S_IRUGO, fpga_irq_count_show, NULL);
+
 static ssize_t fpga_build_show(struct device *dev,
                 struct device_attribute *attr, char *buf)
 {
@@ -377,6 +401,7 @@ static const struct attribute *fpga_attrs[] = {
         &dev_attr_BUILD.attr,
         &dev_attr_BUILD_DATE.attr,
         &dev_attr_BUILD_DATE_STR.attr,
+        &dev_attr_irq_count.attr,
         NULL,
 };
 
@@ -417,6 +442,8 @@ static void __init tiny_gurnard_board_init(void)
 	tiny_gurnard_add_device_nand();
         /* FPGA */
         tiny_gurnard_fpga_init();
+	/* LEDs */
+	at91_gpio_leds(tiny_gurnard_leds, ARRAY_SIZE(tiny_gurnard_leds));
 }
 
 MACHINE_START(TINY_GURNARD, "Tiny Gurnard")

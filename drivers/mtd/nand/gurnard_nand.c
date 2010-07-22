@@ -123,8 +123,8 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host, unsigned
          * clearing the lock if it is zero, or does the MTD layer cover us
          * for this?
          */
-        /* FIXME: Should be taking the page address as an argument, and 
-         * selecting the appropriate level in the stack via the STACK ADDR 
+        /* FIXME: Should be taking the page address as an argument, and
+         * selecting the appropriate level in the stack via the STACK ADDR
          * bits in the FPGA CFG_SET/CFG_CLEAR registers
          */
        reg_writel(MASK_NCE, CFG_SET);
@@ -273,8 +273,10 @@ static int gurnard_read_id(struct gurnard_nand_host *host, uint32_t device_addr,
         if (!four_way_match(id[0]) || !four_way_match(id[1]) ||
             !four_way_match(id[2]) || !four_way_match(id[3]) ||
             !four_way_match(id[4])) {
-                dev_err(&host->pdev->dev, "IDs do not match between chips: "
+                dev_err(&host->pdev->dev,
+                                "Device %d IDs do not match between chips: "
                                 "0x%x 0x%x 0x%x 0x%x 0x%x\n",
+                                device_addr,
                                 id[0], id[1], id[2], id[3], id[4]);
                 return -EINVAL;
         }
@@ -520,27 +522,27 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
 
 #ifdef CONFIG_MTD_NAND_VERIFY_WRITE
         if (!ret) {
-                /* We've just written a page, so read it back & 
+                /* We've just written a page, so read it back &
                  * confirm the data is valid */
 
                 /* FIXME: Should be using the in-fpga read-verify mechanism */
-                ret = gurnard_nand_read_page(mtd, to, host->data_tmp, 
+                ret = gurnard_nand_read_page(mtd, to, host->data_tmp,
                                 host->oob_tmp, -1);
                 if (ret)
                         return ret;
                 if (memcmp(host->data_tmp, buf, mtd->writesize) != 0) {
-                        dev_err(&host->pdev->dev, 
+                        dev_err(&host->pdev->dev,
                                 "Write verify failure at 0x%llx\n",
                                 to);
                         ret = -EIO;
                 } else if (memcmp(host->oob_tmp, oob, mtd->oobsize) != 0) {
-                        dev_err(&host->pdev->dev, 
+                        dev_err(&host->pdev->dev,
                                 "Write verify oob failure at 0x%llx\n",
                                 to);
                         ret = -EIO;
                 }
         }
-         
+
 #endif
 
         return ret;
@@ -912,6 +914,11 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 uint64_t size = 0;
                 int addr = 1 << i;
 
+                if (mtd->priv) {
+                        dev_warn(dev, "NAND stack %d already probed\n", i);
+                        continue;
+                }
+
                 memset(stack, 0, sizeof(*stack));
 
                 stack->host = host;
@@ -970,7 +977,7 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 if (!host->oob_tmp) {
                         host->oob_tmp = kmalloc(mtd->oobsize, GFP_KERNEL);
                         if (!host->oob_tmp) {
-                                dev_err(dev, 
+                                dev_err(dev,
                                         "Unable to allocate %d bytes of oob area\n",
                                         mtd->oobsize);
                                 continue;
