@@ -104,7 +104,6 @@ static struct at91_eth_data __initdata hammerhead_macb_data = {
 	.phy_mask	= ~(1 << 0x01), /* LAN8720 Phy Address = 0x01 */
 };
 
-
 /*
  * NAND flash
  */
@@ -140,12 +139,12 @@ static struct mtd_partition __initdata hammerhead_nand_partition[] = {
 		.size	= SZ_8M,
 	},
 	{
-		.name	= "Kernel1",
+		.name	= "Safe",
 		.offset	= MTDPART_OFS_NXTBLK,
 		.size	= SZ_16M,
 	},
 	{
-		.name	= "Kernel2",
+		.name	= "Working",
 		.offset	= MTDPART_OFS_NXTBLK,
 		.size	= SZ_16M,
 	},
