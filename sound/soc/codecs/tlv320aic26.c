@@ -42,6 +42,8 @@ struct aic26 {
 	int keyclick_len;
 };
 
+static struct aic26 *__aic26;
+
 /* ---------------------------------------------------------------------
  * Register access routines
  */
@@ -157,9 +159,9 @@ static int aic26_hw_params(struct snd_pcm_substream *substream,
 	/* select data word length */
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S8:     wlen = AIC26_WLEN_16; break;
-	case SNDRV_PCM_FORMAT_S16_BE: wlen = AIC26_WLEN_16; break;
-	case SNDRV_PCM_FORMAT_S24_BE: wlen = AIC26_WLEN_24; break;
-	case SNDRV_PCM_FORMAT_S32_BE: wlen = AIC26_WLEN_32; break;
+	case SNDRV_PCM_FORMAT_S16_LE: wlen = AIC26_WLEN_16; break;
+	case SNDRV_PCM_FORMAT_S24_LE: wlen = AIC26_WLEN_24; break;
+	case SNDRV_PCM_FORMAT_S32_LE: wlen = AIC26_WLEN_32; break;
 	default:
 		dev_dbg(&aic26->spi->dev, "bad format\n"); return -EINVAL;
 	}
@@ -267,8 +269,8 @@ static int aic26_set_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 			 SNDRV_PCM_RATE_16000 | SNDRV_PCM_RATE_22050 |\
 			 SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 |\
 			 SNDRV_PCM_RATE_48000)
-#define AIC26_FORMATS	(SNDRV_PCM_FMTBIT_S8     | SNDRV_PCM_FMTBIT_S16_BE |\
-			 SNDRV_PCM_FMTBIT_S24_BE | SNDRV_PCM_FMTBIT_S32_BE)
+#define AIC26_FORMATS	(SNDRV_PCM_FMTBIT_S8     | SNDRV_PCM_FMTBIT_S16_LE | \
+			 SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S32_LE)
 
 static struct snd_soc_dai_ops aic26_dai_ops = {
 	.hw_params	= aic26_hw_params,
@@ -333,7 +335,7 @@ static int aic26_probe(struct platform_device *pdev)
 
 	/* Fetch the relevant aic26 private data here (it's already been
 	 * stored in the .codec pointer) */
-	aic26 = socdev->codec_data;
+	aic26 = __aic26;
 	if (aic26 == NULL) {
 		dev_err(&pdev->dev, "aic26: missing codec pointer\n");
 		return -ENODEV;
@@ -460,6 +462,7 @@ static int aic26_spi_probe(struct spi_device *spi)
 
 	/* Audio Control 3 (master mode, fsref rate) */
 	reg = aic26_reg_read(&aic26->codec, AIC26_REG_AUDIO_CTRL3);
+	dev_err(&spi->dev, "AUDIO_CTRL3 = %.4x\n", reg);
 	reg &= ~0xf800;
 	reg |= 0x0800; /* set master mode */
 	aic26_reg_write(&aic26->codec, AIC26_REG_AUDIO_CTRL3, reg);
@@ -478,6 +481,8 @@ static int aic26_spi_probe(struct spi_device *spi)
 	/* Tell the of_soc helper about this codec */
 	of_snd_soc_register_codec(&aic26_soc_codec_dev, aic26, &aic26_dai,
 				  spi->dev.archdata.of_node);
+#else
+	__aic26 = aic26;
 #endif
 
 	dev_dbg(&spi->dev, "SPI device initialized\n");

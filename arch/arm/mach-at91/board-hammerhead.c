@@ -83,7 +83,9 @@ static void __init hammerhead_init_irq(void)
  */
 static struct at91_usbh_data __initdata hammerhead_usbh_hs_data = {
 	.ports		= 2,
-	.vbus_pin	= {AT91_PIN_PD1, AT91_PIN_PD3},
+
+	/* FIXME - These are not correct, they are both audio pins */
+	//.vbus_pin	= {AT91_PIN_PD1, AT91_PIN_PD3},
 };
 
 
@@ -309,7 +311,8 @@ static struct spi_board_info hammerhead_spi_devices[] = {
 		.modalias	= "tlv320aic26",
 		.chip_select	= 0,
 		.bus_num	= 0,
-		.max_speed_hz	= 20 * 1000 * 1000,
+		.mode		= SPI_MODE_1,
+		.max_speed_hz	= 10 * 1000 * 1000,
 	},
 };
 
@@ -373,8 +376,9 @@ static void __init hammerhead_board_init(void)
 	/* SPI */
 	at91_add_device_spi(hammerhead_spi_devices, ARRAY_SIZE(hammerhead_spi_devices));
 	/* Audio */
-        /* FIXME: Don't have record pins here */
-	at91_add_device_ssc(AT91SAM9G45_ID_SSC0, ATMEL_SSC_TX);
+	at91_add_device_ssc(AT91SAM9G45_ID_SSC0, (ATMEL_SSC_TF | ATMEL_SSC_TX |
+						  ATMEL_SSC_TD | ATMEL_SSC_RK |
+						  ATMEL_SSC_RD));
 	/* adc */
 	at91_add_device_adc(&hammerhead_adc_data);
 #if 0

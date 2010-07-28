@@ -43,6 +43,7 @@
 #include <sound/soc.h>
 
 #include <mach/hardware.h>
+#include <asm/atomic.h>
 
 #include "atmel-pcm.h"
 #include "atmel_ssc_dai.h"
@@ -75,7 +76,11 @@ static struct atmel_pdc_regs pdc_rx_reg = {
  * SSC & PDC status bits for transmit and receive.
  */
 static struct atmel_ssc_mask ssc_tx_mask = {
+#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
+	.ssc_enable	= SSC_BIT(CR_TXEN) | SSC_BIT(CR_RXEN),
+#else
 	.ssc_enable	= SSC_BIT(CR_TXEN),
+#endif
 	.ssc_disable	= SSC_BIT(CR_TXDIS),
 	.ssc_endx	= SSC_BIT(SR_ENDTX),
 	.ssc_endbuf	= SSC_BIT(SR_TXBUFE),
@@ -248,7 +253,13 @@ static void atmel_ssc_shutdown(struct snd_pcm_substream *substream,
 	dma_params = ssc_p->dma_params[dir];
 
 	if (dma_params != NULL) {
+#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
+		if (atomic_dec_and_test(&ssc_p->substreams_running))
+			ssc_writel(ssc_p->ssc->regs, CR, 
+				   dma_params->mask->ssc_disable);
+#else
 		ssc_writel(ssc_p->ssc->regs, CR, dma_params->mask->ssc_disable);
+#endif
 		pr_debug("atmel_ssc_shutdown: %s disabled SSC_SR=0x%08x\n",
 			(dir ? "receive" : "transmit"),
 			ssc_readl(ssc_p->ssc->regs, SR));
@@ -425,9 +436,14 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		 */
 		rcmr =	  SSC_BF(RCMR_PERIOD, ssc_p->rcmr_period)
 			| SSC_BF(RCMR_STTDLY, START_DELAY)
+#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK			
+			| SSC_BF(RCMR_START, SSC_START_CONTINUOUS)
+			| SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS)
+#else
 			| SSC_BF(RCMR_START, SSC_START_FALLING_RF)
-			| SSC_BF(RCMR_CKI, SSC_CKI_RISING)
 			| SSC_BF(RCMR_CKO, SSC_CKO_NONE)
+#endif
+			| SSC_BF(RCMR_CKI, SSC_CKI_RISING)
 			| SSC_BF(RCMR_CKS, SSC_CKS_DIV);
 
 		rfmr =	  SSC_BF(RFMR_FSEDGE, SSC_FSEDGE_POSITIVE)
@@ -514,9 +530,14 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		 */
 		rcmr =	  SSC_BF(RCMR_PERIOD, ssc_p->rcmr_period)
 			| SSC_BF(RCMR_STTDLY, 1)
+#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
+			| SSC_BF(RCMR_START, SSC_START_CONTINUOUS)
+			| SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS)
+#else
 			| SSC_BF(RCMR_START, SSC_START_RISING_RF)
-			| SSC_BF(RCMR_CKI, SSC_CKI_RISING)
 			| SSC_BF(RCMR_CKO, SSC_CKO_NONE)
+#endif
+			| SSC_BF(RCMR_CKI, SSC_CKI_RISING)
 			| SSC_BF(RCMR_CKS, SSC_CKS_DIV);
 
 		rfmr =	  SSC_BF(RFMR_FSEDGE, SSC_FSEDGE_POSITIVE)
@@ -551,9 +572,10 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 		break;
 	}
-	pr_debug("atmel_ssc_hw_params: "
-			"RCMR=%08x RFMR=%08x TCMR=%08x TFMR=%08x\n",
-			rcmr, rfmr, tcmr, tfmr);
+	pr_debug("atmel_ssc_hw_params: format=%d rate=%d channels=%d bits=%d "
+		 "RCMR=%08x RFMR=%08x TCMR=%08x TFMR=%08x\n",
+		 params_format(params), params_rate(params), channels,
+		 bits, rcmr, rfmr, tcmr, tfmr);
 
 	if (!ssc_p->initialized) {
 
@@ -584,8 +606,22 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			return ret;
 		}
 
+#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
+		atomic_set(&ssc_p->substreams_running, 0);
+#endif
+
 		ssc_p->initialized = 1;
 	}
+
+#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
+	if (dir == 0) {
+		/* Set the rx clock period to the tx clock period */
+		pr_debug("%s - Setting rx clock period to tx clock period\n",
+			__func__);
+		rcmr &= 0x00ffffff;
+		rcmr |= tcmr & 0xff000000;
+	}
+#endif
 
 	/* set SSC clock mode register */
 	ssc_writel(ssc_p->ssc->regs, CMR, ssc_p->cmr_div);
@@ -619,6 +655,11 @@ static int atmel_ssc_prepare(struct snd_pcm_substream *substream,
 	dma_params = ssc_p->dma_params[dir];
 
 	ssc_writel(ssc_p->ssc->regs, CR, dma_params->mask->ssc_enable);
+
+#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
+	pr_debug("%s - tx_on_rx_clk\n", __func__);
+	atomic_inc(&ssc_p->substreams_running);
+#endif
 
 	pr_debug("%s enabled SSC_SR=0x%08x\n",
 			dir ? "receive" : "transmit",
