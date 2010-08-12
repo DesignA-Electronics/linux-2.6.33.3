@@ -14,7 +14,7 @@ config SND_ATMEL_SOC_SSC
 	  ATMEL SSC interface. You will also needs to select the individual
 	  machine drivers to support below.
 
-config SND_ATMEL_SOC_TX_ON_RX_CLK
+config SND_ATMEL_SOC_COMBINED_CLOCK
         bool
         depends on SND_ATMEL_SOC
 
@@ -69,7 +69,7 @@ config SND_AT91_SOC_HAMMERHEAD
     select SND_ATMEL_SOC_SSC
     select SND_SOC_TLV320AIC26
         select ATMEL_SSC
-        select SND_ATMEL_SOC_TX_ON_RX_CLK
+        select SND_ATMEL_SOC_COMBINED_CLOCK
     help
       Say Y here to support sound on Hammerhead board.
       

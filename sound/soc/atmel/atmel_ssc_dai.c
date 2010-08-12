@@ -55,6 +55,12 @@
 #define NUM_SSC_DEVICES		3
 #endif
 
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
+#define combined_clock() 1
+#else
+#define combined_clock() 0
+#endif
+
 /*
  * SSC PDC registers required by the PCM DMA engine.
  */
@@ -76,7 +82,11 @@ static struct atmel_pdc_regs pdc_rx_reg = {
  * SSC & PDC status bits for transmit and receive.
  */
 static struct atmel_ssc_mask ssc_tx_mask = {
-#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
+	/*
+	 * FIXME - This hack is needed on Hammerhead rev0 since the
+	 * only the RX bit clock (RK) is connected to the codec
+	 */	
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
 	.ssc_enable	= SSC_BIT(CR_TXEN) | SSC_BIT(CR_RXEN),
 #else
 	.ssc_enable	= SSC_BIT(CR_TXEN),
@@ -89,7 +99,15 @@ static struct atmel_ssc_mask ssc_tx_mask = {
 };
 
 static struct atmel_ssc_mask ssc_rx_mask = {
+	/*
+	 * FIXME - This hack is needed on Hammerhead rev0 since the
+	 * only the RX bit clock (RK) is connected to the codec
+	 */
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
+	.ssc_enable	= SSC_BIT(CR_RXEN) | SSC_BIT(CR_TXEN),
+#else
 	.ssc_enable	= SSC_BIT(CR_RXEN),
+#endif
 	.ssc_disable	= SSC_BIT(CR_RXDIS),
 	.ssc_endx	= SSC_BIT(SR_ENDRX),
 	.ssc_endbuf	= SSC_BIT(SR_RXBUFF),
@@ -253,13 +271,14 @@ static void atmel_ssc_shutdown(struct snd_pcm_substream *substream,
 	dma_params = ssc_p->dma_params[dir];
 
 	if (dma_params != NULL) {
-#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
-		if (atomic_dec_and_test(&ssc_p->substreams_running))
+		if (combined_clock()) {
+			if (atomic_dec_and_test(&ssc_p->substreams_running))
+				ssc_writel(ssc_p->ssc->regs, CR, 
+					   dma_params->mask->ssc_disable);
+		} else {
 			ssc_writel(ssc_p->ssc->regs, CR, 
 				   dma_params->mask->ssc_disable);
-#else
-		ssc_writel(ssc_p->ssc->regs, CR, dma_params->mask->ssc_disable);
-#endif
+		}
 		pr_debug("atmel_ssc_shutdown: %s disabled SSC_SR=0x%08x\n",
 			(dir ? "receive" : "transmit"),
 			ssc_readl(ssc_p->ssc->regs, SR));
@@ -436,14 +455,9 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		 */
 		rcmr =	  SSC_BF(RCMR_PERIOD, ssc_p->rcmr_period)
 			| SSC_BF(RCMR_STTDLY, START_DELAY)
-#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK			
-			| SSC_BF(RCMR_START, SSC_START_CONTINUOUS)
-			| SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS)
-#else
-			| SSC_BF(RCMR_START, SSC_START_FALLING_RF)
-			| SSC_BF(RCMR_CKO, SSC_CKO_NONE)
-#endif
+			| SSC_BF(RCMR_START, SSC_START_FALLING_RF)	
 			| SSC_BF(RCMR_CKI, SSC_CKI_RISING)
+			| SSC_BF(RCMR_CKO, SSC_CKO_NONE)
 			| SSC_BF(RCMR_CKS, SSC_CKS_DIV);
 
 		rfmr =	  SSC_BF(RFMR_FSEDGE, SSC_FSEDGE_POSITIVE)
@@ -469,6 +483,22 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			| SSC_BIT(TFMR_MSBF)
 			| SSC_BF(TFMR_DATDEF, 0)
 			| SSC_BF(TFMR_DATLEN, (bits - 1));
+
+		/*
+		 * FIXME - This hack is needed on Hammerhead rev0 since the
+		 * only the RX bit clock (RK) is connected to the codec
+		 */
+		if (combined_clock()) {
+			/* Clocks are always running */
+			rcmr &= ~(SSC_BF(RCMR_START, 0xf) | 
+				  SSC_BF(RCMR_CKO, 0x7));
+			tcmr &= ~SSC_BF(TCMR_CKO, 0x7);
+				  
+			rcmr |= SSC_BF(RCMR_START, SSC_START_CONTINUOUS) 
+			     |  SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);
+			tcmr |= SSC_BF(TCMR_CKO, SSC_CKO_CONTINUOUS);
+		}
+
 		break;
 
 	case SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBM_CFM:
@@ -530,15 +560,22 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		 */
 		rcmr =	  SSC_BF(RCMR_PERIOD, ssc_p->rcmr_period)
 			| SSC_BF(RCMR_STTDLY, 1)
-#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
-			| SSC_BF(RCMR_START, SSC_START_CONTINUOUS)
-			| SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS)
-#else
-			| SSC_BF(RCMR_START, SSC_START_RISING_RF)
-			| SSC_BF(RCMR_CKO, SSC_CKO_NONE)
-#endif
 			| SSC_BF(RCMR_CKI, SSC_CKI_RISING)
 			| SSC_BF(RCMR_CKS, SSC_CKS_DIV);
+
+		/*
+		 * FIXME - This hack is needed on Hammerhead rev0 since the
+		 * only the RX bit clock (RK) is connected to the codec
+		 */
+		if (combined_clock()) {
+			/* Playback on rx clock */
+			pr_debug("%s - tx on rx clock\n", __func__);
+			rcmr |= SSC_BF(RCMR_START, SSC_START_CONTINUOUS)
+				| SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);	
+		} else {
+			rcmr |= SSC_BF(RCMR_START, SSC_START_RISING_RF)
+				| SSC_BF(RCMR_CKO, SSC_CKO_NONE);
+		}
 
 		rfmr =	  SSC_BF(RFMR_FSEDGE, SSC_FSEDGE_POSITIVE)
 			| SSC_BF(RFMR_FSOS, SSC_FSOS_POSITIVE)
@@ -572,6 +609,19 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 		break;
 	}
+
+	if (combined_clock()) {
+		if (dir == 0) {			
+			/* Set the rx clock period to the tx clock period */
+			rcmr &= 0x00ffffff;
+			rcmr |= tcmr & 0xff000000;
+		} else {
+			/* Set the tx clock period to the rx clock period */
+			tcmr &= 0x00ffffff;
+			tcmr |= rcmr & 0xff000000;
+		}		
+	}
+
 	pr_debug("atmel_ssc_hw_params: format=%d rate=%d channels=%d bits=%d "
 		 "RCMR=%08x RFMR=%08x TCMR=%08x TFMR=%08x\n",
 		 params_format(params), params_rate(params), channels,
@@ -606,22 +656,11 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			return ret;
 		}
 
-#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
-		atomic_set(&ssc_p->substreams_running, 0);
-#endif
+		if (combined_clock())
+			atomic_set(&ssc_p->substreams_running, 0);
 
 		ssc_p->initialized = 1;
 	}
-
-#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
-	if (dir == 0) {
-		/* Set the rx clock period to the tx clock period */
-		pr_debug("%s - Setting rx clock period to tx clock period\n",
-			__func__);
-		rcmr &= 0x00ffffff;
-		rcmr |= tcmr & 0xff000000;
-	}
-#endif
 
 	/* set SSC clock mode register */
 	ssc_writel(ssc_p->ssc->regs, CMR, ssc_p->cmr_div);
@@ -656,10 +695,8 @@ static int atmel_ssc_prepare(struct snd_pcm_substream *substream,
 
 	ssc_writel(ssc_p->ssc->regs, CR, dma_params->mask->ssc_enable);
 
-#ifdef CONFIG_SND_ATMEL_SOC_TX_ON_RX_CLK
-	pr_debug("%s - tx_on_rx_clk\n", __func__);
-	atomic_inc(&ssc_p->substreams_running);
-#endif
+	if (combined_clock())
+		atomic_inc(&ssc_p->substreams_running);
 
 	pr_debug("%s enabled SSC_SR=0x%08x\n",
 			dir ? "receive" : "transmit",
