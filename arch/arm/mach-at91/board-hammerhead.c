@@ -195,21 +195,6 @@ static struct sam9_smc_config __initdata hammerhead_nand_smc_config = {
 	.tdf_cycles		= 3,
 };
 
-static void __init hammerhead_add_device_nand(void)
-{
-	/* setup bus-width (8 or 16) */
-	if (hammerhead_nand_data.bus_width_16)
-		hammerhead_nand_smc_config.mode |= AT91_SMC_DBW_16;
-	else
-		hammerhead_nand_smc_config.mode |= AT91_SMC_DBW_8;
-
-	/* configure chip-select 3 (NAND) */
-	sam9_smc_configure(3, &hammerhead_nand_smc_config);
-
-	at91_add_device_nand(&hammerhead_nand_data);
-}
-
-
 /*
  * LCD Controller
  */
@@ -369,7 +354,7 @@ static void __init hammerhead_board_init(void)
 	/* Ethernet */
 	at91_add_device_eth(&hammerhead_macb_data);
 	/* NAND */
-	hammerhead_add_device_nand();
+	at91_add_device_nand(&hammerhead_nand_data);
 	/* I2C */
 	at91_add_device_i2c(0, hammerhead_i2c0_devices, ARRAY_SIZE(hammerhead_i2c0_devices));
 	at91_add_device_i2c(1, hammerhead_i2c1_devices, ARRAY_SIZE(hammerhead_i2c1_devices));
