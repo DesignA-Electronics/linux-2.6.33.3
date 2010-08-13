@@ -160,7 +160,6 @@ static int hammerhead_tlv320_init(struct snd_soc_codec *codec)
 
 	snd_soc_dapm_enable_pin(codec, "Headphone Jack");
 	snd_soc_dapm_enable_pin(codec, "Mic Jack");
-	printk("Socdev: %p\n", codec->socdev);
 
 	snd_soc_dapm_sync(codec);
 
