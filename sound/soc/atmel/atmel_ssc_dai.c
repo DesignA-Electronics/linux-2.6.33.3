@@ -486,19 +486,27 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 
 		/*
 		 * FIXME - This hack is needed on Hammerhead rev0 since the
-		 * only the RX bit clock (RK) is connected to the codec
+		 * only the RX bit clock (RK) is connected to the codec.
+		 * The rev0 board has RK connected as the bit clock and TF
+		 * connected as the frame clock
 		 */
 		if (combined_clock()) {
-			/* Clocks are always running */
-			rcmr &= ~(SSC_BF(RCMR_START, 0xf) | 
-				  SSC_BF(RCMR_CKO, 0x7));
-			tcmr &= ~SSC_BF(TCMR_CKO, 0x7);
-				  
-			rcmr |= SSC_BF(RCMR_START, SSC_START_CONTINUOUS) 
-			     |  SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);
-			tcmr |= SSC_BF(TCMR_CKO, SSC_CKO_CONTINUOUS);
-		}
+			/* RX clock always running */
+			rcmr &= ~SSC_BF(RCMR_CKO, 0x7);
+			rcmr |=  SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);
 
+			/* RX clock is sourced from TK pin */
+			rcmr &= ~SSC_BF(RCMR_CKS, 0x7);
+			rcmr |=  SSC_BF(RCMR_CKS, SSC_CKS_CLOCK);
+
+			/* Start RX clock on TX start */
+			rcmr &= ~SSC_BF(RCMR_START, 0xf);
+			rcmr |=  SSC_BF(RCMR_START, SSC_START_TX_RX);
+
+			/* TX clock is always running */
+			tcmr &= ~SSC_BF(TCMR_CKO, 0x7);			
+			tcmr |=  SSC_BF(TCMR_CKO, SSC_CKO_CONTINUOUS);
+		}
 		break;
 
 	case SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBM_CFM:
@@ -560,22 +568,10 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		 */
 		rcmr =	  SSC_BF(RCMR_PERIOD, ssc_p->rcmr_period)
 			| SSC_BF(RCMR_STTDLY, 1)
+			| SSC_BF(RCMR_START, SSC_START_RISING_RF)
 			| SSC_BF(RCMR_CKI, SSC_CKI_RISING)
+			| SSC_BF(RCMR_CKO, SSC_CKO_NONE)
 			| SSC_BF(RCMR_CKS, SSC_CKS_DIV);
-
-		/*
-		 * FIXME - This hack is needed on Hammerhead rev0 since the
-		 * only the RX bit clock (RK) is connected to the codec
-		 */
-		if (combined_clock()) {
-			/* Playback on rx clock */
-			pr_debug("%s - tx on rx clock\n", __func__);
-			rcmr |= SSC_BF(RCMR_START, SSC_START_CONTINUOUS)
-				| SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);	
-		} else {
-			rcmr |= SSC_BF(RCMR_START, SSC_START_RISING_RF)
-				| SSC_BF(RCMR_CKO, SSC_CKO_NONE);
-		}
 
 		rfmr =	  SSC_BF(RFMR_FSEDGE, SSC_FSEDGE_POSITIVE)
 			| SSC_BF(RFMR_FSOS, SSC_FSOS_POSITIVE)
@@ -600,6 +596,21 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			| SSC_BIT(TFMR_MSBF)
 			| SSC_BF(TFMR_DATDEF, 0)
 			| SSC_BF(TFMR_DATLEN, (bits - 1));
+
+		/*
+		 * FIXME - This hack is needed on Hammerhead rev0 since the
+		 * only the RX bit clock (RK) is connected to the codec
+		 */
+		if (combined_clock()) {
+			/* Clocks are always running */
+			rcmr &= ~(SSC_BF(RCMR_START, 0xf) | 
+				  SSC_BF(RCMR_CKO, 0x7));
+			tcmr &= ~SSC_BF(TCMR_CKO, 0x7);
+				  
+			rcmr |= SSC_BF(RCMR_START, SSC_START_CONTINUOUS) 
+			     |  SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);
+			tcmr |= SSC_BF(TCMR_CKO, SSC_CKO_CONTINUOUS);
+		}
 		break;
 
 	case SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_CBM_CFM:
@@ -695,8 +706,21 @@ static int atmel_ssc_prepare(struct snd_pcm_substream *substream,
 
 	ssc_writel(ssc_p->ssc->regs, CR, dma_params->mask->ssc_enable);
 
-	if (combined_clock())
+	if (combined_clock()) {
 		atomic_inc(&ssc_p->substreams_running);
+		
+		if (dir == 1) {
+			/*
+			 * Jump start the dma for capture by loading the 
+			 * trasmit holding register with a dummy value. 
+			 *
+			 * FIXME - This should only be needed for Hammerhead
+			 * rev0
+			 */
+			if (!(ssc_readl(ssc_p->ssc->regs, SR) & (1 << 16)))
+				ssc_writel(ssc_p->ssc->regs, THR, 0);
+		}
+	}
 
 	pr_debug("%s enabled SSC_SR=0x%08x\n",
 			dir ? "receive" : "transmit",
