@@ -24,10 +24,25 @@
 #define SSD2119_GPIO_RESET
 #define SSD2119_GPIO_BUS_ENABLE
 
+static struct at91_adc_data adc_data = {
+	.gpios[0] = -1,
+	.gpios[1] = -1,
+	.gpios[2] = AT91_PIN_PD22,
+	.gpios[3] = AT91_PIN_PD23,
+	.gpios[4] = -1,
+	.gpios[5] = -1,
+	.gpios[6] = -1,
+	.gpios[7] = -1,
+
+	.prescale = 4,
+	.startup  = 12,
+	.sample   = 12,
+};
+
 static struct ssd2119_platform_data ssd2119_data = {
 	.gpio_reset	= AT91_PIN_PD1,
 	.gpio_dc	= AT91_PIN_PB11,
-	.refresh_speed	= (HZ / 1),
+	.refresh_speed	= 0,
 };
 
 static struct hi358x_platform_data salmon_test_429_csa_data = {
@@ -37,13 +52,13 @@ static struct hi358x_platform_data salmon_test_429_csa_data = {
 };
 
 static struct hi358x_platform_data salmon_test_429_csb_data = {
-	.model	= HI3588,
+	.model	= HI3587,
 	.tx_irq	= gpio_to_irq(AT91_PIN_PE4),
 	.rx_irq = -1,
 };
 
 static struct hi358x_platform_data salmon_test_429_csc_data = {
-	.model	= HI3588,
+	.model	= HI3587,
 	.tx_irq	= gpio_to_irq(AT91_PIN_PE5),
 	.rx_irq = -1,
 };
@@ -73,7 +88,7 @@ static struct spi_board_info salmon_test_spi_devices[] = {
 	},
 	{
 		/* 429_CSB */
-		.modalias	= "hi3587",
+		.modalias	= "hi358x",
 		.max_speed_hz	= 2000000,
 		.bus_num	= 0,
 		.chip_select	= 2,
@@ -81,7 +96,7 @@ static struct spi_board_info salmon_test_spi_devices[] = {
 	},
 	{
 		/* 429_CSC */
-		.modalias	= "hi3587",
+		.modalias	= "hi358x",
 		.max_speed_hz	= 2000000,
 		.bus_num	= 0,
 		.chip_select	= 3,
@@ -103,6 +118,8 @@ static int __init salmon_test_init(void)
 
 	at91_add_device_spi(salmon_test_spi_devices,
 			    ARRAY_SIZE(salmon_test_spi_devices));
+
+	at91_add_device_adc(&adc_data);
 	return 0;
 }
 
