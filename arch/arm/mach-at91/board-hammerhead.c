@@ -268,14 +268,14 @@ static struct ac97c_platform_data hammerhead_ac97_data = {
  * A/D
  */
 static struct at91_adc_data hammerhead_adc_data = {
-        .gpios[0] = AT91_PIN_PD26,
-        .gpios[1] = AT91_PIN_PD27,
+        .gpios[0] = -1,
+        .gpios[1] = -1,
         .gpios[2] = -1,
         .gpios[3] = -1,
 		.gpios[4] = -1,
 		.gpios[5] = -1,
-		.gpios[6] = -1,
-		.gpios[7] = -1,
+		.gpios[6] = AT91_PIN_PD26,
+		.gpios[7] = AT91_PIN_PD27,
         .prescale = 4,
         .startup = 12,
         .sample = 12,
