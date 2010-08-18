@@ -32,7 +32,7 @@ struct at91_adc {
         struct clk *clk;
         struct device *dev;
         int irq;
-        int adc_vals[4];
+        int adc_vals[8];
         struct completion converted;
 
         struct at91_adc_data *data;
@@ -54,7 +54,7 @@ static void __init at91_adc_hwinit(struct at91_adc *adc)
 					  adc->data->sample << 24));
 		       
         /* Enable all the interrupts */
-        for (i = 0; i < 4; i++)
+        for (i = 0; i < ARRAY_SIZE(adc->data->gpios); i++)
                 if (adc->data->gpios[i] >= 0) {
                         at91_adc_write(adc, AT91_ADC_IER, AT91_ADC_EOC(i));
                         at91_set_A_periph(adc->data->gpios[i], 0);
@@ -65,7 +65,7 @@ static irqreturn_t at91_adc_irq(int irq, void *dev_id)
 {
         struct at91_adc *adc = dev_id;
         int i;
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < ARRAY_SIZE(adc->data->gpios); i++) {
                 if (at91_adc_read (adc, AT91_ADC_SR) & AT91_ADC_EOC(i)) {
                         adc->adc_vals[i] = at91_adc_read(adc, AT91_ADC_CDR(i) &
 							 AT91_ADC_CDR_MASK);
