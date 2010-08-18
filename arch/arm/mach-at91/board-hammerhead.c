@@ -347,7 +347,7 @@ static void __init hammerhead_board_init(void)
 	/* Serial */
 	at91_add_device_serial();
 	/* USB HS Host */
-	at91_set_gpio_output(AT91_PIN_PD20, 0); /* USB_0_EN (N) */
+	at91_set_gpio_output(AT91_PIN_PD20, 1); /* USB_0_EN */
 	at91_add_device_usbh_ohci(&hammerhead_usbh_hs_data);
 	at91_add_device_usbh_ehci(&hammerhead_usbh_hs_data);
 	/* USB HS Device */
