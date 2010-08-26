@@ -123,6 +123,43 @@ static int aic26_reg_write(struct snd_soc_codec *codec, unsigned int reg,
 	return 0;
 }
 
+static ssize_t sysfs_reg(struct device *dev, struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct aic26 *aic26 = dev_get_drvdata(dev);
+	struct snd_soc_codec *codec = &aic26->codec;
+	const char *val_str;
+	u16 reg, val;
+	
+	reg = simple_strtoul(buf, NULL, 0);
+	val_str = strstr(buf, ":");
+
+	if (val_str) {
+		/* Write register value */
+		val = simple_strtoul(val_str + 1, NULL, 0);
+		aic26_reg_write(codec, reg, val);
+		printk(KERN_INFO "Wrote %.4x to register %.4x\n", val, reg);
+		
+	} else {
+		/* Read registyer value */
+		val = aic26_reg_read(codec, reg);
+		printk(KERN_INFO "Register %.4x: %.4x\n", reg, val);
+	}
+	
+	return count;
+}
+
+static DEVICE_ATTR(reg, S_IWUSR, NULL, sysfs_reg);
+
+static struct attribute *sysfs_attrs[] = {
+	&dev_attr_reg.attr,
+	NULL,	
+};
+
+static const struct attribute_group sysfs_files = {
+	.attrs = sysfs_attrs,
+};
+
 /* ---------------------------------------------------------------------
  * Digital Audio Interface Operations
  */
@@ -167,7 +204,13 @@ static int aic26_hw_params(struct snd_pcm_substream *substream,
 	}
 
 	/* Configure PLL */
-	pval = 1;
+
+	/* 
+	 * FIXME - pval is hardcoded for Hammerhead. Should be calculated 
+	 * from master clock rate
+	 */
+	pval = 2; 
+	
 	jval = (fsref == 44100) ? 7 : 8;
 	dval = (fsref == 44100) ? 5264 : 1920;
 	qval = 0;
@@ -181,7 +224,7 @@ static int aic26_hw_params(struct snd_pcm_substream *substream,
 	reg &= ~0xf800;
 	if (aic26->master)
 		reg |= 0x0800;
-	if (fsref == 48000)
+	if (fsref == 44100)
 		reg |= 0x2000;
 	aic26_reg_write(codec, AIC26_REG_AUDIO_CTRL3, reg);
 
@@ -428,6 +471,7 @@ static int aic26_spi_probe(struct spi_device *spi)
 	/* Initialize the driver data */
 	aic26->spi = spi;
 	dev_set_drvdata(&spi->dev, aic26);
+	sysfs_create_group(&spi->dev.kobj, &sysfs_files);
 
 	/* Setup what we can in the codec structure so that the register
 	 * access functions will work as expected.  More will be filled
