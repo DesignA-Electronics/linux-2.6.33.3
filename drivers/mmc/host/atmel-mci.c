@@ -296,6 +296,7 @@ static const struct file_operations atmci_req_fops = {
 	.release	= single_release,
 };
 
+#if 0 /* Causes kernel panics */
 static void atmci_show_status_reg(struct seq_file *s,
 		const char *regname, u32 value)
 {
@@ -460,6 +461,7 @@ static void atmci_init_debugfs(struct atmel_mci_slot *slot)
 err:
 	dev_err(&mmc->class_dev, "failed to initialize debugfs for slot\n");
 }
+#endif
 
 static inline unsigned int ns_to_clocks(struct atmel_mci *host,
 					unsigned int ns)
@@ -1615,7 +1617,9 @@ static int __init atmci_init_slot(struct atmel_mci *host,
 		}
 	}
 
+#if 0 /* This causes a kernel panic on boot */
 	atmci_init_debugfs(slot);
+#endif
 
 	return 0;
 }
