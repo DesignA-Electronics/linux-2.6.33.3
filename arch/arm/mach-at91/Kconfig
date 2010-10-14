@@ -382,6 +382,11 @@ config BOARD_SALMON_TEST_SYSTEM
           Select this option if you using the Bluewater Systems Salmon Test
           System
 
+config MACH_GURNARD
+	bool "Bluewater Systems Gurnard"
+	help
+	  Select this if you are using Bluewater Systems Gurnard
+
 config MACH_TINY_GURNARD
 	bool "Bluewater Systems Tiny Gurnard"
 	help

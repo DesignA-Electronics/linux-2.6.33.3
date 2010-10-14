@@ -69,6 +69,9 @@ obj-$(CONFIG_MACH_AT91SAM9G45EKES) += board-sam9m10g45ek.o
 # Snapper9G45 board-specific support
 obj-$(CONFIG_MACH_SNAPPER9G45) += board-snapper9g45.o
 
+# Gurnard board-specific support
+obj-$(CONFIG_MACH_GURNARD) += board-gurnard.o
+
 # Tiny Gurnard board-specific support
 obj-$(CONFIG_MACH_TINY_GURNARD) += board-tiny_gurnard.o
 
