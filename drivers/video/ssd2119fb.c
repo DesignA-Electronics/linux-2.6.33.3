@@ -55,6 +55,8 @@ struct ssd2119_fb_info {
         uint32_t                map_size;
         struct ssd2119_platform_data *pd;
         struct work_struct      task;
+
+	struct mutex		lock;
 };
 
 // 16 bpp produces incorrect colours
@@ -299,25 +301,41 @@ static int ssd2119_fb_update(struct ssd2119_fb_info *sinfo)
 
 static void ssd2119_fb_update_work(struct work_struct *work)
 {
-        struct ssd2119_fb_info *sinfo = container_of(work, 
-                                        struct ssd2119_fb_info, task);
+        struct ssd2119_fb_info *sinfo = container_of(work,
+					struct ssd2119_fb_info, task);
         ssd2119_fb_update(sinfo);
 }
 
-static void ssd2119_fb_update_timer(unsigned long arg)
+static void ssd2119_fb_mod_timer(struct ssd2119_fb_info *sinfo)
 {
-        struct device *dev = (struct device *)arg;
-        struct fb_info *info = dev_get_drvdata(dev);
-        struct ssd2119_fb_info *sinfo = info->par;
+	unsigned timeout;
 
-        schedule_work(&sinfo->task);
-        mod_timer(&sinfo->auto_update_timer, 
-                  jiffies + sinfo->pd->refresh_speed);
+	//mutex_lock(&sinfo->lock);
+
+	if (!sinfo->pd->refresh_speed) { 
+		if (timer_pending(&sinfo->auto_update_timer))
+			del_timer_sync(&sinfo->auto_update_timer);
+		return;
+	}
+
+	if (timer_pending(&sinfo->auto_update_timer))
+		return;
+
+	timeout = msecs_to_jiffies(1000 / sinfo->pd->refresh_speed);
+	mod_timer(&sinfo->auto_update_timer, jiffies + timeout);
+	//mutex_unlock(&sinfo->lock);
 }
 
-static void ssd2119_fb_reset(struct ssd2119_fb_info *sinfo)
+static void ssd2119fb_timer_func(unsigned long arg)
 {
-	// Configure GPIO's
+        struct ssd2119_fb_info *sinfo = (struct ssd2119_fb_info *)arg;
+
+        schedule_work(&sinfo->task);
+	ssd2119_fb_mod_timer(sinfo);
+}
+
+static void ssd2119fb_reset(struct ssd2119_fb_info *sinfo)
+{
 	gpio_set_value(sinfo->pd->gpio_dc, 0);
 
 	/* Reset */
@@ -350,6 +368,29 @@ static void ssd2119_fb_reset(struct ssd2119_fb_info *sinfo)
         // ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6230);
 }
 
+static ssize_t ssd2119_fb_refresh_hz_store(struct device *dev,
+					   struct device_attribute *attr,
+					   const char *buf, size_t count)
+{
+        struct fb_info *info = dev_get_drvdata(dev);
+        struct ssd2119_fb_info *sinfo = info->par;
+
+	sinfo->pd->refresh_speed = simple_strtoul(buf, NULL, 0);
+	ssd2119_fb_mod_timer(sinfo);
+	
+	return count;
+}
+
+static ssize_t ssd2119_fb_refresh_hz_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{	
+        struct fb_info *info = dev_get_drvdata(dev);
+        struct ssd2119_fb_info *sinfo = info->par;
+
+	return sprintf(buf, "%d\n", sinfo->pd->refresh_speed);
+}
+
 static ssize_t ssd2119_fb_reset_sysfs(struct device *dev, 
                                        struct device_attribute *attr,
                                        const char *buf, size_t count)
@@ -357,7 +398,7 @@ static ssize_t ssd2119_fb_reset_sysfs(struct device *dev,
         struct fb_info *info = dev_get_drvdata(dev);
         struct ssd2119_fb_info *sinfo = info->par;
 
-	ssd2119_fb_reset(sinfo);
+	ssd2119fb_reset(sinfo);
 	return count;
 }
 
@@ -386,35 +427,15 @@ static ssize_t ssd2119_fb_update_sysfs(struct device *dev,
         return count;
 }
 
-static ssize_t ssd2119_fb_test_sysfs(struct device *dev, struct device_attribute *attr,
-                            const char *buf, size_t count)
-{
-        struct fb_info *info = dev_get_drvdata(dev);
-        unsigned short *fb = (unsigned short *)info->screen_base;
-        struct ssd2119_fb_info *sinfo = info->par;
-        int x,y;
-
-        for (y=0; y<LCD_HEIGHT; y++) {
-                for (x=0; x<LCD_WIDTH; x++) {
-                        if (x<80) fb[(y*LCD_WIDTH)+x] = 0xF800;
-                        else if (x<160) fb[(y*LCD_WIDTH)+x] = 0x07E0;
-                        else if (x<240) fb[(y*LCD_WIDTH)+x] = 0x007F;
-                        else fb[(y*LCD_WIDTH)+x] = 0xFFFF;
-                }
-        }
-        ssd2119_fb_update(sinfo);
-
-        return count;
-}
-
 static DEVICE_ATTR(reset, S_IWUSR, NULL, ssd2119_fb_reset_sysfs);
-static DEVICE_ATTR(test, S_IWUSR, NULL, ssd2119_fb_test_sysfs);
 static DEVICE_ATTR(update, S_IWUSR, NULL, ssd2119_fb_update_sysfs);
+static DEVICE_ATTR(refresh_hz, S_IWUSR | S_IRUGO, ssd2119_fb_refresh_hz_show,
+		   ssd2119_fb_refresh_hz_store);
 
 static struct attribute *ssd2119_fb_attrs[] = {
+	&dev_attr_refresh_hz.attr,
 	&dev_attr_reset.attr,
-	&dev_attr_test.attr,
-        &dev_attr_update.attr,
+        &dev_attr_update.attr,	
         NULL,
 };
 
@@ -540,7 +561,6 @@ static int ssd2119_fb_probe(struct spi_device *spi)
         // ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6830);
         // ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6230);
 #else
-	ssd2119_fb_reset(sinfo);
 #endif
 
 	// Register the frame buffer
@@ -551,14 +571,20 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	}
 
 	INIT_WORK(&sinfo->task, ssd2119_fb_update_work);
+	mutex_init(&sinfo->lock);
 
-        // Start the update timer
-	init_timer(&sinfo->auto_update_timer);
-	sinfo->auto_update_timer.data = (unsigned long)dev;
-	sinfo->auto_update_timer.function = ssd2119_fb_update_timer;
-	mod_timer(&sinfo->auto_update_timer, jiffies + sinfo->pd->refresh_speed);
+	ssd2119fb_reset(sinfo);
 
-	dev_info(dev, "Driver $Revision: 0.1 $\n");
+        /* Initialise the auto-refresh timer and kick it off if necessary */
+	setup_timer(&sinfo->auto_update_timer, ssd2119fb_timer_func,
+		    (unsigned long)sinfo);
+	ssd2119_fb_mod_timer(sinfo);
+
+	if (sinfo->pd->refresh_speed)
+		dev_info(dev, "Initialised - Auto refreshing at %d hz\n",
+			 sinfo->pd->refresh_speed);
+	else
+		dev_info(dev, "Initialised - Auto refresh disabled\n"); 
 	return 0;
 
 release_fb:
@@ -611,18 +637,18 @@ static struct spi_driver ssd2119fb_driver = {
         .remove = ssd2119_fb_remove,
 };
 
-static int __init ssd2119_fb_init(void)
+static int __init ssd2119fb_init(void)
 {
 	return spi_register_driver(&ssd2119fb_driver);
 }
 
-static void __exit ssd2119_fb_exit(void)
+static void __exit ssd2119fb_exit(void)
 {
 	spi_unregister_driver(&ssd2119fb_driver);
 }
 
-module_init(ssd2119_fb_init);
-module_exit(ssd2119_fb_exit);
+module_init(ssd2119fb_init);
+module_exit(ssd2119fb_exit);
 
 MODULE_DESCRIPTION("SSD2119 LCD driver");
 MODULE_AUTHOR("Carl Smith <carl@bluewatersys.com>");
