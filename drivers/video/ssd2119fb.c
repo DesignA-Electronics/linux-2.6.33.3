@@ -92,7 +92,22 @@ static int ssd2119_write(struct ssd2119_fb_info *sinfo, u8 *buf, int len)
                 .len = len,
         };
         struct spi_message m;
+
         spi_message_init(&m);
+        spi_message_add_tail(&t, &m);
+        return spi_sync(sinfo->spi, &m);
+}
+
+static int ssd2119fb_dma_write(struct ssd2119_fb_info *sinfo, u8 *buf, int len)
+{
+        struct spi_transfer t = {
+                .tx_buf = buf,
+                .len = len,
+        };
+        struct spi_message m;
+
+        spi_message_init(&m);
+	//m.is_dma_mapped = 1;
         spi_message_add_tail(&t, &m);
         return spi_sync(sinfo->spi, &m);
 }
@@ -295,7 +310,7 @@ static int ssd2119_fb_update(struct ssd2119_fb_info *sinfo)
          */
 #define STEP (LCD_WIDTH * 2 * 6)
         for (i = 0; i < LCD_WIDTH * LCD_HEIGHT * BPP / 8; i+= STEP)
-                ssd2119_write(sinfo, &((u8*)info->screen_base)[i], STEP);
+                ssd2119fb_dma_write(sinfo, &((u8*)info->screen_base)[i], STEP);
         return 0;
 }
 
@@ -460,6 +475,7 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	struct device *dev = &spi->dev;
 	struct ssd2119_fb_info *sinfo;
 	struct fb_info *info;
+	dma_addr_t dma_addr;
 	int ret = -ENOMEM;
 
 	// Allocate Frame buffer
@@ -489,16 +505,13 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	sinfo->spi = spi;
         sinfo->pd = dev->platform_data;
 	
-        if (!sinfo->pd->refresh_speed) {
-                dev_warn(dev, "No refresh speed selected - default to 1 FPS\n");
-                sinfo->pd->refresh_speed = HZ;
-        }
-
 	strcpy(info->fix.id, spi->modalias);
 	info->fbops = &ssd2119_fb_ops;
 
         sinfo->map_size = LCD_WIDTH * LCD_HEIGHT * BPP / 8;
 	// Allocate frame buffer
+
+#if 1
 	sinfo->map_cpu = (void*)__get_free_pages(GFP_KERNEL, 6);
         sinfo->map_dma = dma_map_single(dev, sinfo->map_cpu, sinfo->map_size, DMA_TO_DEVICE);
 
@@ -511,11 +524,25 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	info->fix.smem_start = sinfo->map_dma;
 	info->fix.smem_len = sinfo->map_size;
 	info->fix.line_length = LCD_WIDTH * BPP / 8;
+
 	dev_info(info->device,
 	       "%uKiB frame buffer at %08x (mapped at %p)\n",
                sinfo->map_size / 1024,
                (int)sinfo->map_dma,
 	       sinfo->map_cpu);
+#else
+
+	info->fix.line_length = LCD_WIDTH * BPP / 8;
+	info->fix.smem_len = LCD_HEIGHT * info->fix.line_length;
+	info->screen_base = dma_alloc_coherent(NULL, 
+					       PAGE_ALIGN(info->fix.smem_len),
+					       &dma_addr, GFP_KERNEL);
+	if (!info->screen_base) {
+		ret = -ENOMEM;
+		goto remove_sysfs;
+	}
+	info->fix.smem_start = (unsigned long)dma_addr;
+#endif
 
 	ret = ssd2119_fb_check_var(&info->var, info);
 
