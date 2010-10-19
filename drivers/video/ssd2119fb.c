@@ -10,12 +10,9 @@
  * published by the Free Software Foundation.
  *
  */
-//#undef DEBUG
-//#define DEBUG
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/errno.h>
 #include <linux/delay.h>
 #include <linux/fb.h>
 #include <linux/dma-mapping.h>
@@ -25,6 +22,9 @@
 #include <linux/spi/spi.h>
 
 #include <video/ssd2119fb.h>
+
+/* Amount to DMA to frame buffer per SPI transfer */
+#define SSD2119FB_DMA_BLOCK_SIZE	1024
 
 #define SSD2119_OSC_START_REG         0x00
 #define SSD2119_OUTPUT_CTRL_REG       0x01
@@ -47,16 +47,11 @@
 
 /* Frame buffer info */
 struct ssd2119_fb_info {
-	struct fb_info 		*info;
-	struct spi_device	*spi;
-	struct timer_list	auto_update_timer;
-        dma_addr_t              map_dma;
-        u_char 			*map_cpu;
-        uint32_t                map_size;
-        struct ssd2119_platform_data *pd;
-        struct work_struct      task;
-
-	struct mutex		lock;
+	struct fb_info			*info;
+	struct spi_device		*spi;
+	struct timer_list		auto_update_timer; 
+        struct work_struct		task;	
+	struct ssd2119_platform_data	*pd;
 };
 
 // 16 bpp produces incorrect colours
@@ -98,16 +93,18 @@ static int ssd2119_write(struct ssd2119_fb_info *sinfo, u8 *buf, int len)
         return spi_sync(sinfo->spi, &m);
 }
 
-static int ssd2119fb_dma_write(struct ssd2119_fb_info *sinfo, u8 *buf, int len)
+static int ssd2119fb_dma_write(struct ssd2119_fb_info *sinfo,
+			       u8 *buf, dma_addr_t dma_addr, int len)
 {
         struct spi_transfer t = {
-                .tx_buf = buf,
-                .len = len,
+		.tx_buf = buf,
+                .tx_dma = dma_addr,
+                .len 	= len,
         };
         struct spi_message m;
 
         spi_message_init(&m);
-	//m.is_dma_mapped = 1;
+	m.is_dma_mapped = 1;
         spi_message_add_tail(&t, &m);
         return spi_sync(sinfo->spi, &m);
 }
@@ -161,13 +158,6 @@ static int ssd2119_full_command(struct ssd2119_fb_info *sinfo, uint8_t reg,
 static int ssd2119_fb_check_var(struct fb_var_screeninfo *var,
 			     struct fb_info *info)
 {
-	struct device *dev = info->device;
-
-	dev_info(dev, "%s:\n", __func__);
-	dev_info(dev, "  resolution: %ux%u\n", var->xres, var->yres);
-	dev_info(dev, "  pixclk:     %u Hz\n", var->pixclock);
-	dev_info(dev, "  bpp:        %u\n", var->bits_per_pixel);
-
 	/* Force same alignment for each line */
 	var->xres = (var->xres + 3) & ~3UL;
 	var->xres_virtual = (var->xres_virtual + 3) & ~3UL;
@@ -204,8 +194,6 @@ static int ssd2119_fb_check_var(struct fb_var_screeninfo *var,
 		var->transp.length 	= 0;
 		break;
 	default:
-		dev_err(dev, "color depth %d not supported\n",
-					var->bits_per_pixel);
 		return -EINVAL;
 	}
 
@@ -217,8 +205,8 @@ static int ssd2119_fb_check_var(struct fb_var_screeninfo *var,
 }
 
 static int ssd2119_fb_setcolreg(unsigned int regno, unsigned int red,
-                unsigned int green, unsigned int blue,
-                unsigned int transp, struct fb_info *info)
+				unsigned int green, unsigned int blue,
+				unsigned int transp, struct fb_info *info)
 {
 	unsigned int val;
         int ret = 0;
@@ -231,35 +219,6 @@ static int ssd2119_fb_setcolreg(unsigned int regno, unsigned int red,
 		ret = 0;
 	}
         return ret;
-}
-
-
-/**
- *      ssd2119_fb_set_par - Alters the hardware state.
- *      @info: frame buffer structure that represents a single frame buffer
- *
- *	Using the fb_var_screeninfo in fb_info we set the resolution
- *	of the this particular framebuffer. This function alters the
- *	par AND the fb_fix_screeninfo stored in fb_info. It doesn't
- *	not alter var in fb_info since we are using that data. This
- *	means we depend on the data in var inside fb_info to be
- *	supported by the hardware. If you can't
- *	change the resolution you don't need this function.
- *
- */
-static int ssd2119_fb_set_par(struct fb_info *info)
-{
-	int ret = 0;
-
-	dev_info(info->device, "+%s\n", __func__);
-	dev_info(info->device, "    resolution: %ux%u (%ux%u virtual) %u bpp\n",
-		 info->var.xres, info->var.yres,
-		 info->var.xres_virtual, info->var.yres_virtual,
-		 info->var.bits_per_pixel);
-
-	dev_info(info->device, "-%s\n", __func__);
-
-	return ret;
 }
 
 static int ssd2119_fb_pan_display(struct fb_var_screeninfo *var,
@@ -292,40 +251,58 @@ static int ssd2119_fb_blank(int blank, struct fb_info *info)
 
 }
 
-static int ssd2119_fb_update(struct ssd2119_fb_info *sinfo)
+static int ssd2119fb_update_region(struct ssd2119_fb_info *sinfo,
+				   int x, int y, int w, int h)
 {
         struct fb_info *info = sinfo->info;
-        int i;
-        ssd2119_full_command(sinfo, SSD2119_X_RAM_ADDR_REG, 0);
+	int count, block, total, offset, bpp;
+	
+	/* Set the rectangle window */
+	ssd2119_full_command(sinfo, SSD2119_H_RAM_START_REG, x);
+	ssd2119_full_command(sinfo, SSD2119_H_RAM_END_REG, x + w - 1);
+	ssd2119_full_command(sinfo, SSD2119_V_RAM_POS_REG, 
+			     ((y + h - 1) << 8) | y);
+
+	/* Write to GRAM */
+	ssd2119_full_command(sinfo, SSD2119_X_RAM_ADDR_REG, 0);
         ssd2119_full_command(sinfo, SSD2119_Y_RAM_ADDR_REG, 0);
         ssd2119_command(sinfo, SSD2119_RAM_DATA_REG);
-
 	gpio_set_value(sinfo->pd->gpio_dc, 1);
 
-        /**
-         * FIXME: For some reason we can't do a DMA of the entire
-         * frame at once. Not sure why this is, but we seem to be
-         * able to work around it by limiting our DMA transfers to 
-         * less than 2048
-         */
-#define STEP (LCD_WIDTH * 2 * 6)
-        for (i = 0; i < LCD_WIDTH * LCD_HEIGHT * BPP / 8; i+= STEP)
-                ssd2119fb_dma_write(sinfo, &((u8*)info->screen_base)[i], STEP);
-        return 0;
+	bpp = info->var.bits_per_pixel / 8;
+	offset = (y * (info->var.xres * bpp)) + (x * bpp);
+	total = w * h * bpp;
+	count = 0;
+	while (count < w * h * bpp) {
+		if (w == info->var.xres)
+			block = min(SSD2119FB_DMA_BLOCK_SIZE, total - count);
+		else
+			block = w;
+
+		//ssd2119_write(sinfo, ((u8 *)info->screen_base) + offset,
+		//block);
+		ssd2119fb_dma_write(sinfo, ((u8 *)info->screen_base) + offset,
+				    info->fix.smem_start + offset, block);
+
+		count += block;
+		offset += block + ((info->var.xres - w) * bpp);
+	}
+
+	return 0;
 }
 
 static void ssd2119_fb_update_work(struct work_struct *work)
 {
         struct ssd2119_fb_info *sinfo = container_of(work,
 					struct ssd2119_fb_info, task);
-        ssd2119_fb_update(sinfo);
+        struct fb_info *info = sinfo->info;
+
+        ssd2119fb_update_region(sinfo, 0, 0, info->var.xres, info->var.yres);
 }
 
 static void ssd2119_fb_mod_timer(struct ssd2119_fb_info *sinfo)
 {
 	unsigned timeout;
-
-	//mutex_lock(&sinfo->lock);
 
 	if (!sinfo->pd->refresh_speed) { 
 		if (timer_pending(&sinfo->auto_update_timer))
@@ -338,7 +315,6 @@ static void ssd2119_fb_mod_timer(struct ssd2119_fb_info *sinfo)
 
 	timeout = msecs_to_jiffies(1000 / sinfo->pd->refresh_speed);
 	mod_timer(&sinfo->auto_update_timer, jiffies + timeout);
-	//mutex_unlock(&sinfo->lock);
 }
 
 static void ssd2119fb_timer_func(unsigned long arg)
@@ -430,7 +406,7 @@ static ssize_t ssd2119_fb_update_sysfs(struct device *dev,
 
         start_time = current_kernel_time();
 #endif
-        ssd2119_fb_update(sinfo);
+        ssd2119fb_update_region(sinfo, 0, 0, info->var.xres, info->var.yres);
 
 #ifdef SSD2119FB_DEBUG
         finish_time = current_kernel_time();
@@ -459,15 +435,14 @@ static const struct attribute_group sysfs_files = {
 };
 
 static struct fb_ops ssd2119_fb_ops = {
-	.owner			= THIS_MODULE,
+	.owner		= THIS_MODULE,
 	.fb_check_var	= ssd2119_fb_check_var,
-	.fb_set_par		= ssd2119_fb_set_par,
 	.fb_setcolreg	= ssd2119_fb_setcolreg,
 	.fb_pan_display	= ssd2119_fb_pan_display,
 	.fb_fillrect	= cfb_fillrect,
 	.fb_copyarea	= cfb_copyarea,
 	.fb_imageblit	= cfb_imageblit,
-        .fb_blank       = ssd2119_fb_blank,
+        .fb_blank	= ssd2119_fb_blank,
 };
 
 static int ssd2119_fb_probe(struct spi_device *spi)
@@ -478,25 +453,18 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	dma_addr_t dma_addr;
 	int ret = -ENOMEM;
 
-	// Allocate Frame buffer
 	info = framebuffer_alloc(sizeof(struct ssd2119_fb_info), dev);
-	if (!info) {
-			dev_err(dev, "Cannot allocate memory\n");
-			goto out;
-	}
+	if (!info)
+		goto out;
 
-	info->pseudo_palette = kmalloc(sizeof (u32) * MAX_PALETTES, GFP_KERNEL);
-	if (!info->pseudo_palette) {
-		dev_err(dev, "Cannot allocate memory\n");
+	info->pseudo_palette = kmalloc(sizeof (u32) * MAX_PALETTES,
+				       GFP_KERNEL);
+	if (!info->pseudo_palette)
                 goto free_info;
-	}
 
-	// Create SYSFS group
 	ret = sysfs_create_group(&dev->kobj, &sysfs_files);
-        if (ret) {
-                dev_err(dev, "Unable to create sysfs files\n");
+        if (ret)
                 goto free_pseudo_palette;
-        }
 
 	info->var = ssd2119fb_var;
 	info->fix = ssd2119fb_fix;
@@ -508,30 +476,11 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	strcpy(info->fix.id, spi->modalias);
 	info->fbops = &ssd2119_fb_ops;
 
-        sinfo->map_size = LCD_WIDTH * LCD_HEIGHT * BPP / 8;
-	// Allocate frame buffer
-
-#if 1
-	sinfo->map_cpu = (void*)__get_free_pages(GFP_KERNEL, 6);
-        sinfo->map_dma = dma_map_single(dev, sinfo->map_cpu, sinfo->map_size, DMA_TO_DEVICE);
-
-        info->screen_base = sinfo->map_cpu;
-
-	if (!info->screen_base) {
-			dev_err(dev, "Out of memory\n");
-			goto remove_sysfs;
-	}
-	info->fix.smem_start = sinfo->map_dma;
-	info->fix.smem_len = sinfo->map_size;
-	info->fix.line_length = LCD_WIDTH * BPP / 8;
-
-	dev_info(info->device,
-	       "%uKiB frame buffer at %08x (mapped at %p)\n",
-               sinfo->map_size / 1024,
-               (int)sinfo->map_dma,
-	       sinfo->map_cpu);
-#else
-
+	/* 
+	 * FIXME - Should probably pass dev to dma_alloc_coherent, but don't
+	 * know how to set dma_coherent_mask for spi devices using 
+	 * spi_board_info struct
+	 */
 	info->fix.line_length = LCD_WIDTH * BPP / 8;
 	info->fix.smem_len = LCD_HEIGHT * info->fix.line_length;
 	info->screen_base = dma_alloc_coherent(NULL, 
@@ -542,7 +491,6 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 		goto remove_sysfs;
 	}
 	info->fix.smem_start = (unsigned long)dma_addr;
-#endif
 
 	ret = ssd2119_fb_check_var(&info->var, info);
 
@@ -556,49 +504,12 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	gpio_direction_output(sinfo->pd->gpio_dc, 0);
 	gpio_request(sinfo->pd->gpio_reset, "ssd2119_reset");
 	gpio_direction_output(sinfo->pd->gpio_reset, 1);
-		
-#if 0
-	// Configure GPIO's
-        if (sinfo->pd->init)
-                sinfo->pd->init();
-        sinfo->pd->set_dc(0);
-        sinfo->pd->reset();
 
-        // Initialise screen
-        ssd2119_full_command(sinfo, SSD2119_SLEEP_MODE_REG, 0x0001);
-        ssd2119_full_command(sinfo, SSD2119_OSC_START_REG, 0x0001);
-        //ssd2119_full_command(sinfo, SSD2119_OUTPUT_CTRL_REG, 0x30ef);
-        ssd2119_full_command(sinfo, SSD2119_OUTPUT_CTRL_REG, 0x38ef);
-        //ssd2119_full_command(sinfo, SSD2119_OUTPUT_CTRL_REG, 0x78ef);
-        ssd2119_full_command(sinfo, SSD2119_LCD_DRIVE_AC_CTRL_REG, 0x0600);
-        ssd2119_full_command(sinfo, SSD2119_SLEEP_MODE_REG, 0x0000);
-        mdelay(30);
-        ssd2119_full_command(sinfo, SSD2119_DISPLAY_CTRL_REG, 0x0033);
-        // ssd2119_full_command(sinfo, SSD2119_PWR_CTRL_2_REG, 0x0005);
-        // ssd2119_full_command(sinfo, SSD2119_PWR_CTRL_3_REG, 0x0007);
-        // ssd2119_full_command(sinfo, SSD2119_PWR_CTRL_4_REG, 0x3100);
-        ssd2119_full_command(sinfo, SSD2119_V_RAM_POS_REG, (LCD_HEIGHT - 1) << 8);
-        ssd2119_full_command(sinfo, SSD2119_H_RAM_START_REG, 0);
-        ssd2119_full_command(sinfo, SSD2119_H_RAM_END_REG, LCD_WIDTH - 1);
-#if BPP == 24
-	ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x4230);
-#else
-	ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6230);
-#endif
-        // ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6830);
-        // ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6230);
-#else
-#endif
-
-	// Register the frame buffer
 	ret = register_framebuffer(info);
-	if (ret < 0) {
-		dev_err(dev, "Failed to register framebuffer device: %d\n", ret);
+	if (ret < 0)
 		goto release_fb;
-	}
 
 	INIT_WORK(&sinfo->task, ssd2119_fb_update_work);
-	mutex_init(&sinfo->lock);
 
 	ssd2119fb_reset(sinfo);
 
@@ -615,7 +526,8 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	return 0;
 
 release_fb:
-	free_pages((unsigned long)sinfo->map_cpu, 6);
+	dma_free_coherent(NULL, PAGE_ALIGN(info->fix.smem_len),
+			  info->screen_base, dma_addr);
 remove_sysfs:
 	sysfs_remove_group(&dev->kobj, &sysfs_files);
 free_pseudo_palette:
@@ -623,7 +535,6 @@ free_pseudo_palette:
 free_info:
 	framebuffer_release(info);
 out:
-	dev_dbg(dev, "%s FAILED\n", __func__);
 	return ret;
 }
 
@@ -633,23 +544,14 @@ static int ssd2119_fb_remove(struct spi_device *spi)
 	struct fb_info *info = dev_get_drvdata(dev);
 	struct ssd2119_fb_info *sinfo = info->par;
 
-	// Remove update timer
+	/* FIMXE - Is the timer running? */
 	del_timer_sync(&sinfo->auto_update_timer);
-
-	// Remove SYS files
 	sysfs_remove_group(&dev->kobj, &sysfs_files);
-
-	// Free frame buffer
-	if (info->screen_base)
-                free_pages((unsigned long)sinfo->map_cpu, 6);
-
-	/* Free gpios */
+	dma_free_coherent(NULL, PAGE_ALIGN(info->fix.smem_len), 
+			  info->screen_base, (dma_addr_t)info->fix.smem_start);
 	gpio_free(sinfo->pd->gpio_dc);
 	gpio_free(sinfo->pd->gpio_reset);
-
 	kfree(info->pseudo_palette);
-
-	dev_set_drvdata(dev, NULL);
 	framebuffer_release(info);
 	return 0;
 }
