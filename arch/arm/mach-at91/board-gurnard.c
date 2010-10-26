@@ -1,5 +1,5 @@
 /*
- *  Board-specific setup code for the Bluewater Systems Tiny Gurnard board
+ *  Board-specific setup code for the Bluewater Systems Gurnard board
  *
  *  Copyright (C) 2010 Bluewater Systems Ltd.
  *
@@ -38,14 +38,8 @@
 #include "sam9_smc.h"
 #include "generic.h"
 
-/**
- * In rev0 this was on PC11
- * #define FPGA_IRQ        AT91_PIN_PC11
- */
-/**
- * In rev1 we are on PD18, which in periph B mode is the external IRQ
- */
 #define FPGA_IRQ        AT91SAM9G45_ID_IRQ0
+#define FPGA_IRQ_LEVEL  IRQ_TYPE_LEVEL_LOW
 
 /* Taken from 7.3 of document gurnard 06 */
 #define FPGA_ROM_PHYS          AT91_CHIPSELECT_0
@@ -95,7 +89,7 @@ static void __init gurnard_map_io(void)
         /* UART0 and UART1 on gurnard */
 	at91_register_uart(AT91SAM9G45_ID_US0, 1,
 			   ATMEL_UART_CTS | ATMEL_UART_RTS);
-	at91_register_uart(AT91SAM9G45_ID_US1, 2, 
+	at91_register_uart(AT91SAM9G45_ID_US1, 2,
 			   ATMEL_UART_CTS | ATMEL_UART_RTS);
 
 	/* set serial console to ttyS0 (ie, DBGU) */
@@ -108,15 +102,19 @@ static void __init gurnard_map_io(void)
 /**
  * FPGA interrupt counter
  */
-uint32_t fpga_irq_count = 0;
+static uint32_t fpga_irq_count = 0;
 
 static void gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
         uint32_t pending = FPGA_IFR;
 
-        /* If the FPGA is not programmed, then skip it */
+        /**
+         * If the FPGA is not programmed, then skip it.
+         * These spurious interrupts can happen during the programming
+         * of the FPGA
+         **/
         if ((FPGA_ID & 0xffff0000) != 0x000d0000) {
-                pr_err("Tiny Gurnard FPGA IRQ, but FPGA not programmed\n");
+                pr_err("Gurnard FPGA IRQ, but FPGA not programmed\n");
                 return;
         }
 
@@ -170,7 +168,7 @@ static void __init gurnard_init_irq(void)
                 set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
         }
 
-        set_irq_type(FPGA_IRQ, IRQ_TYPE_LEVEL_LOW);
+        set_irq_type(FPGA_IRQ, FPGA_IRQ_LEVEL);
         set_irq_chained_handler(FPGA_IRQ, gurnard_irq_handler);
 }
 
@@ -307,6 +305,13 @@ static struct spi_board_info gurnard_spi_board_info[] __initdata = {
 		.bus_num = 0,
 		.chip_select = 0,
 	},
+        {
+                .modalias = "lq043t3",
+                .max_speed_hz = 10000000, /* 20 MHz max clock */
+                .bus_num = 0,
+                .chip_select = 1,
+                .controller_data = AT91_PIN_PA9, /* CS pin */
+        },
 };
 
 /* FPGA NAND access */
@@ -343,7 +348,8 @@ static struct fb_videomode at91_tft_vga_modes[] = {
 	{
 		.name           = "Sharp LQ043T3DX0A",
 		.refresh	= 50,
-		.xres		= 480,		.yres		= 270,
+		.xres		= 480,		
+                .yres		= 272,
 		.pixclock	= KHZ2PICOS(9000),
 
 		.left_margin	= 0,		.right_margin	= 0,
@@ -356,7 +362,7 @@ static struct fb_videomode at91_tft_vga_modes[] = {
 };
 
 static struct fb_monspecs at91fb_default_monspecs = {
-	.manufacturer	= "Sharp",
+	.manufacturer	= "SH",
 	.monitor        = "LQ043T3DX0A",
 
 	.modedb		= at91_tft_vga_modes,
@@ -492,10 +498,6 @@ static void __init gurnard_fpga_init(void)
 {
         /* FPGA IRQ Needs to be in periph B mode */
         at91_set_B_periph(AT91_PIN_PD18, 1);
-        /* FPGA attached to the SPI bus */
-	at91_add_device_spi(gurnard_spi_board_info,
-		ARRAY_SIZE(gurnard_spi_board_info));
-
         /* FPGA platform dev, for us to attach SYSFS files to */
 	platform_device_register(&gurnard_fpga_device);
         /* FPGA NAND */
@@ -520,9 +522,13 @@ static void __init gurnard_board_init(void)
 	/* NAND */
 	gurnard_add_device_nand();
         /* FPGA */
-        //gurnard_fpga_init();
+        gurnard_fpga_init();
 	/* LEDs */
 	at91_gpio_leds(gurnard_leds, ARRAY_SIZE(gurnard_leds));
+        /* FPGA & LCD attached to the SPI bus */
+	at91_add_device_spi(gurnard_spi_board_info,
+		ARRAY_SIZE(gurnard_spi_board_info));
+
 	/* LCD */
 	at91_add_device_lcdc(&gurnard_lcdc_data);
 	/* Backlight */
@@ -539,7 +545,7 @@ static void __init gurnard_board_init(void)
 	at91_add_device_mci(0, &gurnard_mmc_data);
 }
 
-MACHINE_START(TINY_GURNARD, "Gurnard")
+MACHINE_START(GURNARD, "Gurnard")
 	/* Maintainer: Bluewater Systems */
 	.phys_io	= AT91_BASE_SYS,
 	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,

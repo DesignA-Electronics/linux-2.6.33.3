@@ -78,6 +78,9 @@ obj-$(CONFIG_MACH_TINY_GURNARD) += board-tiny_gurnard.o
 # Hammerhead board-specific support
 obj-$(CONFIG_MACH_HAMMERHEAD) += board-hammerhead.o
 
+# Snapper9G20 board-specific support
+obj-$(CONFIG_MACH_SNAPPER9G20) += board-snapper9g20.o
+
 # AT91CAP9 board-specific support
 obj-$(CONFIG_MACH_AT91CAP9ADK)	+= board-cap9adk.o
 

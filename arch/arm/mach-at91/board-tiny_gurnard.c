@@ -36,14 +36,23 @@
 #include "sam9_smc.h"
 #include "generic.h"
 
+#define TINY_GURNARD_REV	1
+//#define TINY_GURNARD_REV	0
+
 /**
  * In rev0 this was on PC11
- * #define FPGA_IRQ        AT91_PIN_PC11
  */
+#if TINY_GURNARD_REV == 0
+#define FPGA_IRQ        AT91_PIN_PC11
+#define FPGA_IRQ_LEVEL IRQ_TYPE_EDGE_BOTH
+#endif
 /**
  * In rev1 we are on PD18, which in periph B mode is the external IRQ
  */
+#if TINY_GURNARD_REV == 1
 #define FPGA_IRQ        AT91SAM9G45_ID_IRQ0
+#define FPGA_IRQ_LEVEL IRQ_TYPE_LEVEL_LOW
+#endif
 
 /* Taken from 7.3 of document tiny_gurnard 06 */
 #define FPGA_ROM_PHYS          AT91_CHIPSELECT_0
@@ -102,7 +111,7 @@ static void __init tiny_gurnard_map_io(void)
 /**
  * FPGA interrupt counter
  */
-uint32_t fpga_irq_count = 0;
+static uint32_t fpga_irq_count = 0;
 
 static void tiny_gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
@@ -164,7 +173,7 @@ static void __init tiny_gurnard_init_irq(void)
                 set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
         }
 
-        set_irq_type(FPGA_IRQ, IRQ_TYPE_LEVEL_LOW);
+        set_irq_type(FPGA_IRQ, FPGA_IRQ_LEVEL);
         set_irq_chained_handler(FPGA_IRQ, tiny_gurnard_irq_handler);
 }
 
@@ -376,6 +385,14 @@ static ssize_t fpga_irq_count_show(struct device *dev,
 }
 static DEVICE_ATTR(irq_count, S_IRUGO, fpga_irq_count_show, NULL);
 
+static ssize_t board_revision(struct device *dev,
+                struct device_attribute *attr, char *buf)
+{
+        return sprintf(buf, "%d\n", TINY_GURNARD_REV);
+}
+
+static DEVICE_ATTR(board_revision, S_IRUGO, board_revision, NULL);
+
 static ssize_t fpga_build_show(struct device *dev,
                 struct device_attribute *attr, char *buf)
 {
@@ -402,6 +419,7 @@ static const struct attribute *fpga_attrs[] = {
         &dev_attr_BUILD_DATE.attr,
         &dev_attr_BUILD_DATE_STR.attr,
         &dev_attr_irq_count.attr,
+        &dev_attr_board_revision.attr,
         NULL,
 };
 
