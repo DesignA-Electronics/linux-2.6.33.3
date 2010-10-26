@@ -104,6 +104,7 @@ struct atmel_tsadcc {
 	unsigned int		prev_absx;
 	unsigned int		prev_absy;
 	unsigned char		bufferedmeasure;
+	unsigned int		debounce;
 };
 
 static void __iomem		*tsc_base;
@@ -124,7 +125,9 @@ static irqreturn_t atmel_tsadcc_interrupt(int irq, void *dev)
 
 	if (status & ATMEL_TSADCC_NOCNT) {
 		/* Contact lost */
-		reg = atmel_tsadcc_read(ATMEL_TSADCC_MR) | ATMEL_TSADCC_PENDBC;
+		reg = atmel_tsadcc_read(ATMEL_TSADCC_MR);
+		reg &= ~ATMEL_TSADCC_PENDBC;
+		reg |= ts_dev->debounce;
 
 		atmel_tsadcc_write(ATMEL_TSADCC_MR, reg);
 		atmel_tsadcc_write(ATMEL_TSADCC_TRGR, ATMEL_TSADCC_TRGMOD_NONE);
@@ -284,12 +287,13 @@ static int __devinit atmel_tsadcc_probe(struct platform_device *pdev)
 
 	dev_info(&pdev->dev, "Prescaler is set at: %d\n", prsc);
 
+	ts_dev->debounce = (pdata->pendet_debounce << 28) & ATMEL_TSADCC_PENDBC;
 	reg = ATMEL_TSADCC_TSAMOD_TS_ONLY_MODE		|
 		((0x00 << 5) & ATMEL_TSADCC_SLEEP)	|	/* Normal Mode */
 		((0x01 << 6) & ATMEL_TSADCC_PENDET)	|	/* Enable Pen Detect */
 		(prsc << 8)				|
 		((0x26 << 16) & ATMEL_TSADCC_STARTUP)	|
-		((pdata->pendet_debounce << 28) & ATMEL_TSADCC_PENDBC);
+		(ts_dev->debounce);
 
 	atmel_tsadcc_write(ATMEL_TSADCC_CR, ATMEL_TSADCC_SWRST);
 	atmel_tsadcc_write(ATMEL_TSADCC_MR, reg);
