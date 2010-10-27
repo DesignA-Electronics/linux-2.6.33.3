@@ -205,8 +205,10 @@ static int atmel_tsadcc_adc_get_value(struct atmel_tsadcc *ts_dev, int channel)
 	/* Enable the channel */
 	atmel_tsadcc_write(ATMEL_TSADCC_CHER, 1 << channel);
 
-	/* Start the conversion */
-	atmel_tsadcc_write(ATMEL_TSADCC_CR, ATMEL_TSADCC_START);
+	/* Start the conversion if needed */
+	if ((atmel_tsadcc_read(ATMEL_TSADCC_TRGR) & ATMEL_TSADCC_TRGMOD) ==
+	     ATMEL_TSADCC_TRGMOD_NONE)
+		atmel_tsadcc_write(ATMEL_TSADCC_CR, ATMEL_TSADCC_START);
 
 	wait_for_completion(&ts_dev->converted);
 
