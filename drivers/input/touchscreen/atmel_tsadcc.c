@@ -87,6 +87,10 @@
 #define ATMEL_TSADCC_CDR3	0x3C	/* Channel Data 3 */
 #define ATMEL_TSADCC_CDR4	0x40	/* Channel Data 4 */
 #define ATMEL_TSADCC_CDR5	0x44	/* Channel Data 5 */
+#define ATMEL_TSADCC_CDR6	0x48	/* Channel Data 6 */
+#define ATMEL_TSADCC_CDR7	0x4C	/* Channel Data 7 */
+#define ATMEL_TSADCC_CDR(n)	(ATMEL_TSADCC_CDR0 + (4 * n))
+#define ATMEL_TSADCC_CDR_MASK	0x03FF
 
 #define ATMEL_TSADCC_XPOS	0x50
 #define ATMEL_TSADCC_Z1DAT	0x54
@@ -105,6 +109,9 @@ struct atmel_tsadcc {
 	unsigned int		prev_absy;
 	unsigned char		bufferedmeasure;
 	unsigned int		debounce;
+
+        int			adc_vals[8];
+        struct completion	converted;
 };
 
 static void __iomem		*tsc_base;
@@ -119,6 +126,7 @@ static irqreturn_t atmel_tsadcc_interrupt(int irq, void *dev)
 
 	unsigned int status;
 	unsigned int reg;
+	int i;
 
 	status = atmel_tsadcc_read(ATMEL_TSADCC_SR);
 	status &= atmel_tsadcc_read(ATMEL_TSADCC_IMR);
@@ -173,8 +181,69 @@ static irqreturn_t atmel_tsadcc_interrupt(int irq, void *dev)
 		ts_dev->prev_absy /= atmel_tsadcc_read(ATMEL_TSADCC_CDR0);
 	}
 
+	/* Read the ADC values */
+	if (status & (ATMEL_TSADCC_EOC(4) | ATMEL_TSADCC_EOC(5) |
+	                     ATMEL_TSADCC_EOC(6) | ATMEL_TSADCC_EOC(7))) {
+        	for (i = 4; i < 8; i++) {
+			if (atmel_tsadcc_read(ATMEL_TSADCC_SR) &
+			    ATMEL_TSADCC_EOC(i)){
+				ts_dev->adc_vals[i] =
+				    atmel_tsadcc_read(ATMEL_TSADCC_CDR(i) &
+				                      ATMEL_TSADCC_CDR_MASK);
+			}
+		}
+        	complete(&ts_dev->converted);
+	}
+
 	return IRQ_HANDLED;
 }
+
+static int atmel_tsadcc_adc_get_value(struct atmel_tsadcc *ts_dev, int channel)
+{
+	init_completion(&ts_dev->converted);
+
+	/* Enable the channel */
+	atmel_tsadcc_write(ATMEL_TSADCC_CHER, 1 << channel);
+
+	/* Start the conversion */
+	atmel_tsadcc_write(ATMEL_TSADCC_CR, ATMEL_TSADCC_START);
+
+	wait_for_completion(&ts_dev->converted);
+
+	/* Disable the channel */
+	atmel_tsadcc_write(ATMEL_TSADCC_CHDR, 1 << channel);
+	return ts_dev->adc_vals[channel];
+}
+
+#define ADC_READ_ATTR(x)						\
+	static ssize_t atmel_tsadcc_adc_read_value_##x(struct device *dev,    \
+	                                       struct device_attribute *attr, \
+	                                       char *buf)		\
+	{								\
+		struct atmel_tsadcc *ts_dev = dev_get_drvdata(dev);	\
+		return sprintf(buf, "0x%x\n",				\
+		               atmel_tsadcc_adc_get_value(ts_dev, x));	\
+	}								\
+	static DEVICE_ATTR(adc##x, S_IRUSR | S_IRUGO,			\
+	                   atmel_tsadcc_adc_read_value_##x, NULL);
+
+ADC_READ_ATTR(4);
+ADC_READ_ATTR(5);
+ADC_READ_ATTR(6);
+ADC_READ_ATTR(7);
+
+static struct attribute *atmel_tsadcc_adc_attrs[] = {
+        &dev_attr_adc4.attr,
+        &dev_attr_adc5.attr,
+        &dev_attr_adc6.attr,
+        &dev_attr_adc7.attr,
+
+        NULL,
+};
+
+static const struct attribute_group atmel_tsadcc_adc_sysfs_files = {
+        .attrs = atmel_tsadcc_adc_attrs,
+};
 
 /*
  * The functions for inserting/removing us as a module.
@@ -302,7 +371,14 @@ static int __devinit atmel_tsadcc_probe(struct platform_device *pdev)
 		(pdata->ts_sample_hold_time << 24) & ATMEL_TSADCC_TSSHTIM);
 
 	atmel_tsadcc_read(ATMEL_TSADCC_SR);
-	atmel_tsadcc_write(ATMEL_TSADCC_IER, ATMEL_TSADCC_PENCNT);
+	atmel_tsadcc_write(ATMEL_TSADCC_IER, ATMEL_TSADCC_PENCNT |
+		ATMEL_TSADCC_EOC(4) | ATMEL_TSADCC_EOC(5) |
+		ATMEL_TSADCC_EOC(6) | ATMEL_TSADCC_EOC(7));
+
+        err = sysfs_create_group(&pdev->dev.kobj,
+	                         &atmel_tsadcc_adc_sysfs_files);
+        if (err)
+                goto err_sysfs;
 
 	/* All went ok, so register to the input system */
 	err = input_register_device(input_dev);
@@ -312,6 +388,8 @@ static int __devinit atmel_tsadcc_probe(struct platform_device *pdev)
 	return 0;
 
 err_fail:
+	sysfs_remove_group(&pdev->dev.kobj, &atmel_tsadcc_adc_sysfs_files);
+err_sysfs:
 	clk_disable(ts_dev->clk);
 	clk_put(ts_dev->clk);
 err_free_irq:
@@ -335,6 +413,8 @@ static int __devexit atmel_tsadcc_remove(struct platform_device *pdev)
 	free_irq(ts_dev->irq, ts_dev);
 
 	input_unregister_device(ts_dev->input);
+
+	sysfs_remove_group(&pdev->dev.kobj, &atmel_tsadcc_adc_sysfs_files);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	iounmap(tsc_base);
