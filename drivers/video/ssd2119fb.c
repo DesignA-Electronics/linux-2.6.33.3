@@ -42,8 +42,10 @@
 #define SSD2119_X_RAM_ADDR_REG        0x4E
 #define SSD2119_Y_RAM_ADDR_REG        0x4F
 
+/* FIXME - Remove these */
 #define LCD_WIDTH	320
 #define LCD_HEIGHT	240
+#define BPP		24
 
 /* Frame buffer info */
 struct ssd2119_fb_info {
@@ -53,12 +55,6 @@ struct ssd2119_fb_info {
         struct work_struct		task;	
 	struct ssd2119_platform_data	*pd;
 };
-
-// 16 bpp produces incorrect colours
-#define BPP 16
-//#define BPP 24
-
-#define MAX_PALETTES      16
 
 static struct fb_fix_screeninfo ssd2119fb_fix = {
 	.id =		"ssd2119fb",
@@ -76,7 +72,7 @@ static struct fb_var_screeninfo ssd2119fb_var = {
 	.yres		= 240,
 	.xres_virtual	= 320,
 	.yres_virtual	= 240,
-	.bits_per_pixel	= BPP,
+	.bits_per_pixel	= 24,
 	.nonstd		= 1,
 };
 
@@ -166,23 +162,6 @@ static int ssd2119_fb_check_var(struct fb_var_screeninfo *var,
 	var->transp.offset = var->transp.length = 0;
 
 	switch (var->bits_per_pixel) {
-	case 2:
-	case 4:
-	case 8:
-		var->red.offset = var->green.offset = var->blue.offset = 0;
-		var->red.length = var->green.length = var->blue.length
-			= var->bits_per_pixel;
-		break;
-	case 16:
-		var->red.offset 	= 0;
-		var->red.length		= 6;
-		var->green.offset	= 6;
-		var->green.length	= 12;
-		var->blue.offset	= 12;
-		var->blue.length	= 6;
-		var->transp.offset	= 0;
-		var->transp.length	= 0;
-		break;
 	case 24:
 		var->red.offset 	= 16;
 		var->red.length 	= 8;
@@ -193,6 +172,7 @@ static int ssd2119_fb_check_var(struct fb_var_screeninfo *var,
 		var->transp.offset 	= 0;
 		var->transp.length 	= 0;
 		break;
+		
 	default:
 		return -EINVAL;
 	}
@@ -202,36 +182,6 @@ static int ssd2119_fb_check_var(struct fb_var_screeninfo *var,
 		var->transp.msb_right = 0;
 
 	return 0;
-}
-
-static int ssd2119_fb_setcolreg(unsigned int regno, unsigned int red,
-				unsigned int green, unsigned int blue,
-				unsigned int transp, struct fb_info *info)
-{
-	unsigned int val;
-        int ret = 0;
-
-	if (regno < MAX_PALETTES) {
-		u32 *pal = info->pseudo_palette;
-
-		val = ((red & 0xff00) << 8) | (green & 0xff00) | ((blue & 0xff00) >> 8);
-		pal[regno] = val;
-		ret = 0;
-	}
-        return ret;
-}
-
-static int ssd2119_fb_pan_display(struct fb_var_screeninfo *var,
-			       struct fb_info *info)
-{
-	int ret = 0;
-
-	dev_info(info->device, "+%s\n", __func__);
-	dev_info(info->device, "    xoffset=%u yoffset=%u\n",
-			var->xoffset, var->yoffset);
-
-	dev_info(info->device, "-%s\n", __func__);
-	return ret;
 }
 
 static int ssd2119_fb_blank(int blank, struct fb_info *info)
@@ -257,7 +207,15 @@ static int ssd2119fb_update_region(struct ssd2119_fb_info *sinfo,
         struct fb_info *info = sinfo->info;
 	int count, block, total, offset, bpp;
 	
-	/* Set the rectangle window */
+	/*
+	 * Set the rectangle window
+	 *
+	 * TODO: Because SPI bandwidth is limited, it would be useful to have
+	 * an ioctl which can update a sub-rectangle of the screen. This
+	 * update function supports this, but no userspace interface exists
+	 * yet.
+	 *
+	 */
 	ssd2119_full_command(sinfo, SSD2119_H_RAM_START_REG, x);
 	ssd2119_full_command(sinfo, SSD2119_H_RAM_END_REG, x + w - 1);
 	ssd2119_full_command(sinfo, SSD2119_V_RAM_POS_REG, 
@@ -279,8 +237,6 @@ static int ssd2119fb_update_region(struct ssd2119_fb_info *sinfo,
 		else
 			block = w;
 
-		//ssd2119_write(sinfo, ((u8 *)info->screen_base) + offset,
-		//block);
 		ssd2119fb_dma_write(sinfo, ((u8 *)info->screen_base) + offset,
 				    info->fix.smem_start + offset, block);
 
@@ -437,8 +393,6 @@ static const struct attribute_group sysfs_files = {
 static struct fb_ops ssd2119_fb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_check_var	= ssd2119_fb_check_var,
-	.fb_setcolreg	= ssd2119_fb_setcolreg,
-	.fb_pan_display	= ssd2119_fb_pan_display,
 	.fb_fillrect	= cfb_fillrect,
 	.fb_copyarea	= cfb_copyarea,
 	.fb_imageblit	= cfb_imageblit,
@@ -457,14 +411,9 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	if (!info)
 		goto out;
 
-	info->pseudo_palette = kmalloc(sizeof (u32) * MAX_PALETTES,
-				       GFP_KERNEL);
-	if (!info->pseudo_palette)
-                goto free_info;
-
 	ret = sysfs_create_group(&dev->kobj, &sysfs_files);
         if (ret)
-                goto free_pseudo_palette;
+                goto free_info;
 
 	info->var = ssd2119fb_var;
 	info->fix = ssd2119fb_fix;
@@ -530,9 +479,7 @@ release_fb:
 			  info->screen_base, dma_addr);
 remove_sysfs:
 	sysfs_remove_group(&dev->kobj, &sysfs_files);
-free_pseudo_palette:
-	kfree(info->pseudo_palette);
-free_info:
+free_info:	
 	framebuffer_release(info);
 out:
 	return ret;
@@ -551,7 +498,6 @@ static int ssd2119_fb_remove(struct spi_device *spi)
 			  info->screen_base, (dma_addr_t)info->fix.smem_start);
 	gpio_free(sinfo->pd->gpio_dc);
 	gpio_free(sinfo->pd->gpio_reset);
-	kfree(info->pseudo_palette);
 	framebuffer_release(info);
 	return 0;
 }
