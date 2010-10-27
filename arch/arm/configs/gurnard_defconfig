@@ -1,7 +1,7 @@
 #
 # Automatically generated make config: don't edit
 # Linux kernel version: 2.6.33.3
-# Fri Jul 23 11:31:32 2010
+# Fri Oct 15 10:51:44 2010
 #
 CONFIG_ARM=y
 CONFIG_SYS_SUPPORTS_APM_EMULATION=y
@@ -241,6 +241,7 @@ CONFIG_AT91_PMC_UNIT=y
 #
 # CONFIG_MACH_AT91SAM9G45EKES is not set
 # CONFIG_MACH_SNAPPER9G45 is not set
+CONFIG_MACH_GURNARD=y
 CONFIG_MACH_TINY_GURNARD=y
 # CONFIG_MACH_HAMMERHEAD is not set
 
