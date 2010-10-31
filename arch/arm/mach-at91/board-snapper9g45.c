@@ -182,14 +182,53 @@ static struct mci_platform_data __initdata sn9g45_mmc_data = {
 #if defined(CONFIG_FB_ATMEL) || defined(CONFIG_FB_ATMEL_MODULE)
 static struct fb_videomode at91_tft_vga_modes[] = {
 	{
-		.name           = "LG",
+		.name           = "SDTV",
 		.refresh	= 60,
-		.xres		= 480,		.yres		= 272,
-		.pixclock	= KHZ2PICOS(9000),
+		.xres		= 720,		.yres		= 576,
+		.pixclock	= KHZ2PICOS(33333),
 
-		.left_margin	= 1,		.right_margin	= 1,
-		.upper_margin	= 40,		.lower_margin	= 1,
-		.hsync_len	= 45,		.vsync_len	= 1,
+		.left_margin	= 45,		.right_margin	= 16,
+		.upper_margin	= 44,		.lower_margin	= 11,
+		.hsync_len	= 96,		.vsync_len	= 2,
+
+		.sync		= 0,
+		.vmode		= FB_VMODE_NONINTERLACED,
+	},
+	{
+		.name           = "VGA",
+		.refresh	= 60,
+		.xres		= 640,		.yres		= 480,
+		.pixclock	= KHZ2PICOS(27000),
+
+		.left_margin	= 65,		.right_margin	= 16,
+		.upper_margin	= 51,		.lower_margin	= 11,
+		.hsync_len	= 96,		.vsync_len	= 2,
+
+		.sync		= 0,
+		.vmode		= FB_VMODE_NONINTERLACED,
+	},
+	{
+		.name           = "SVGA",
+		.refresh	= 60,
+		.xres		= 800,		.yres		= 600,
+		.pixclock	= KHZ2PICOS(45000),
+
+		.left_margin	= 174,		.right_margin	= 32,
+		.upper_margin	= 75,		.lower_margin	= 3,
+		.hsync_len	= 80,		.vsync_len	= 4,
+
+		.sync		= 0,
+		.vmode		= FB_VMODE_NONINTERLACED,
+	},
+	{
+		.name           = "XGA",
+		.refresh	= 60,
+		.xres		= 1024,		.yres		= 768,
+		.pixclock	= KHZ2PICOS(67600),
+
+		.left_margin	= 174,		.right_margin	= 24,
+		.upper_margin	= 41,		.lower_margin	= 3,
+		.hsync_len	= 136,		.vsync_len	= 6,
 
 		.sync		= 0,
 		.vmode		= FB_VMODE_NONINTERLACED,
@@ -197,15 +236,15 @@ static struct fb_videomode at91_tft_vga_modes[] = {
 };
 
 static struct fb_monspecs at91fb_default_monspecs = {
-	.manufacturer	= "LG",
-	.monitor        = "LB043WQ1",
+	.manufacturer	= NULL,
+	.monitor        = NULL,
 
 	.modedb		= at91_tft_vga_modes,
 	.modedb_len	= ARRAY_SIZE(at91_tft_vga_modes),
 	.hfmin		= 15000,
 	.hfmax		= 17640,
-	.vfmin		= 57,
-	.vfmax		= 67,
+	.vfmin		= 60,
+	.vfmax		= 75,
 };
 
 #define AT91SAM9G45_DEFAULT_LCDCON2 	(ATMEL_LCDC_MEMOR_LITTLE \
@@ -215,7 +254,7 @@ static struct fb_monspecs at91fb_default_monspecs = {
 /* Driver datas */
 static struct atmel_lcdfb_info __initdata sn9g45_lcdc_data = {
 	.lcdcon_is_backlight		= true,
-	.default_bpp			= 32,
+	.default_bpp			= 16,
 	.default_dmacon			= ATMEL_LCDC_DMAEN,
 	.default_lcdcon2		= AT91SAM9G45_DEFAULT_LCDCON2,
 	.default_monspecs		= &at91fb_default_monspecs,
@@ -232,7 +271,7 @@ static struct atmel_lcdfb_info __initdata sn9g45_lcdc_data;
  */
 static struct at91_tsadcc_data sn9g45_tsadcc_data = {
 	.adc_clock		= 300000,
-	.pendet_debounce	= 0x0d,
+	.pendet_debounce	= 0x08,
 	.ts_sample_hold_time	= 0x0a,
 };
 
@@ -260,12 +299,10 @@ static void __init sn9g45_board_init(void)
 	/* Audio */
         /* FIXME: Don't have record pins here */
 	at91_add_device_ssc(AT91SAM9G45_ID_SSC0, ATMEL_SSC_TX);
-#if 0
 	/* LCD Controller */
 	at91_add_device_lcdc(&sn9g45_lcdc_data);
 	/* Touch Screen */
 	at91_add_device_tsadcc(&sn9g45_tsadcc_data);
-#endif
 	at91_add_device_mci(0, &sn9g45_mmc_data);
 }
 
