@@ -90,19 +90,22 @@ static int ssd2119_write(struct ssd2119_fb_info *sinfo, u8 *buf, int len)
 }
 
 static int ssd2119fb_dma_write(struct ssd2119_fb_info *sinfo,
-			       u8 *buf, dma_addr_t dma_addr, int len)
+			       u8 *buf, dma_addr_t dma_addr, int *len)
 {
+	int ret;
         struct spi_transfer t = {
 		.tx_buf = buf,
                 .tx_dma = dma_addr,
-                .len 	= len,
+                .len 	= *len,
         };
         struct spi_message m;
 
         spi_message_init(&m);
 	m.is_dma_mapped = 1;
         spi_message_add_tail(&t, &m);
-        return spi_sync(sinfo->spi, &m);
+        ret = spi_sync(sinfo->spi, &m);
+	*len = m.actual_length;
+	return ret;
 }
 
 static int ssd2119_command(struct ssd2119_fb_info *sinfo, uint8_t reg)
@@ -238,7 +241,7 @@ static int ssd2119fb_update_region(struct ssd2119_fb_info *sinfo,
 			block = w;
 
 		ssd2119fb_dma_write(sinfo, ((u8 *)info->screen_base) + offset,
-				    info->fix.smem_start + offset, block);
+				    info->fix.smem_start + offset, &block);
 
 		count += block;
 		offset += block + ((info->var.xres - w) * bpp);

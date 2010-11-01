@@ -459,6 +459,7 @@ atmel_spi_interrupt(int irq, void *dev_id)
 		if (xfer->delay_usecs)
 			udelay(xfer->delay_usecs);
 
+		msg->actual_length = xfer->len - spi_readl(as, TCR);
 		dev_warn(master->dev.parent, "overrun (%u/%u remaining)\n",
 			 spi_readl(as, TCR), spi_readl(as, RCR));
 
