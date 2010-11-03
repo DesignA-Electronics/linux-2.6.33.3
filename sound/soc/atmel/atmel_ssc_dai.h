@@ -115,9 +115,7 @@ struct atmel_ssc_info {
 	unsigned short rcmr_period;
 	struct atmel_pcm_dma_params *dma_params[2];
 	struct atmel_ssc_state ssc_state;
-#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
 	atomic_t substreams_running;
-#endif
 };
 extern struct snd_soc_dai atmel_ssc_dai[];
 
