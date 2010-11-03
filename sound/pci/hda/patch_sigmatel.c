@@ -1539,11 +1539,9 @@ static unsigned int alienware_m17x_pin_configs[13] = {
 	0x904601b0,
 };
 
-static unsigned int intel_dg45id_pin_configs[14] = {
+static unsigned int intel_dg45id_pin_configs[13] = {
 	0x02214230, 0x02A19240, 0x01013214, 0x01014210,
-	0x01A19250, 0x01011212, 0x01016211, 0x40f000f0,
-	0x40f000f0, 0x40f000f0, 0x40f000f0, 0x014510A0,
-	0x074510B0, 0x40f000f0
+	0x01A19250, 0x01011212, 0x01016211
 };
 
 static unsigned int *stac92hd73xx_brd_tbl[STAC_92HD73XX_MODELS] = {
@@ -1602,6 +1600,10 @@ static struct snd_pci_quirk stac92hd73xx_cfg_tbl[] = {
 				"Dell Studio 1555", STAC_DELL_M6_DMIC),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL, 0x02bd,
 				"Dell Studio 1557", STAC_DELL_M6_DMIC),
+	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL, 0x02fe,
+				"Dell Studio XPS 1645", STAC_DELL_M6_BOTH),
+	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL, 0x0413,
+				"Dell Studio 1558", STAC_DELL_M6_BOTH),
 	{} /* terminator */
 };
 
@@ -1725,6 +1727,8 @@ static struct snd_pci_quirk stac92hd71bxx_cfg_tbl[] = {
 		      "HP HDX", STAC_HP_HDX),  /* HDX16 */
 	SND_PCI_QUIRK_MASK(PCI_VENDOR_ID_HP, 0xfff0, 0x3620,
 		      "HP dv6", STAC_HP_DV5),
+	SND_PCI_QUIRK(PCI_VENDOR_ID_HP, 0x3061,
+		      "HP dv6", STAC_HP_DV5), /* HP dv6-1110ax */
 	SND_PCI_QUIRK_MASK(PCI_VENDOR_ID_HP, 0xfff0, 0x7010,
 		      "HP", STAC_HP_DV5),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL, 0x0233,
@@ -2066,12 +2070,12 @@ static struct snd_pci_quirk stac927x_cfg_tbl[] = {
 	SND_PCI_QUIRK_MASK(PCI_VENDOR_ID_INTEL, 0xff00, 0x2000,
 			   "Intel D965", STAC_D965_3ST),
 	/* Dell 3 stack systems */
-	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x01f7, "Dell XPS M1730", STAC_DELL_3ST),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x01dd, "Dell Dimension E520", STAC_DELL_3ST),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x01ed, "Dell     ", STAC_DELL_3ST),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x01f4, "Dell     ", STAC_DELL_3ST),
 	/* Dell 3 stack systems with verb table in BIOS */
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x01f3, "Dell Inspiron 1420", STAC_DELL_BIOS),
+	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x01f7, "Dell XPS M1730", STAC_DELL_BIOS),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x0227, "Dell Vostro 1400  ", STAC_DELL_BIOS),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x022e, "Dell     ", STAC_DELL_BIOS),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_DELL,  0x022f, "Dell Inspiron 1525", STAC_DELL_BIOS),
