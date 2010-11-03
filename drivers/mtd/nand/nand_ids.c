@@ -103,6 +103,9 @@ struct nand_flash_dev nand_flash_ids[] = {
 	{"NAND 1GiB 1,8V 16-bit",	0xB3, 0, 1024, 0, LP_OPTIONS16},
 	{"NAND 1GiB 3,3V 16-bit",	0xC3, 0, 1024, 0, LP_OPTIONS16},
 
+        /* 8 Gigabit from Micro MT29F32G08AfABA */
+        {"NAND 1GiB 3,3V 8-bit",        0x48, 0, 1024, 0, LP_OPTIONS},
+
 	/* 16 Gigabit */
 	{"NAND 2GiB 1,8V 8-bit",	0xA5, 0, 2048, 0, LP_OPTIONS},
 	{"NAND 2GiB 3,3V 8-bit",	0xD5, 0, 2048, 0, LP_OPTIONS},
