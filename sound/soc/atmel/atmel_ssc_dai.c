@@ -271,11 +271,14 @@ static void atmel_ssc_shutdown(struct snd_pcm_substream *substream,
 	dma_params = ssc_p->dma_params[dir];
 
 	if (dma_params != NULL) {
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
 		if (combined_clock()) {
 			if (atomic_dec_and_test(&ssc_p->substreams_running))
 				ssc_writel(ssc_p->ssc->regs, CR, 
 					   dma_params->mask->ssc_disable);
-		} else {
+		} else
+#endif
+		{
 			ssc_writel(ssc_p->ssc->regs, CR, 
 				   dma_params->mask->ssc_disable);
 		}
@@ -484,6 +487,7 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			| SSC_BF(TFMR_DATDEF, 0)
 			| SSC_BF(TFMR_DATLEN, (bits - 1));
 
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
 		/*
 		 * FIXME - This hack is needed on Hammerhead rev0 since the
 		 * only the RX bit clock (RK) is connected to the codec.
@@ -507,6 +511,7 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			tcmr &= ~SSC_BF(TCMR_CKO, 0x7);			
 			tcmr |=  SSC_BF(TCMR_CKO, SSC_CKO_CONTINUOUS);
 		}
+#endif
 		break;
 
 	case SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBM_CFM:
@@ -597,6 +602,7 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			| SSC_BF(TFMR_DATDEF, 0)
 			| SSC_BF(TFMR_DATLEN, (bits - 1));
 
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
 		/*
 		 * FIXME - This hack is needed on Hammerhead rev0 since the
 		 * only the RX bit clock (RK) is connected to the codec
@@ -611,6 +617,7 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			     |  SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);
 			tcmr |= SSC_BF(TCMR_CKO, SSC_CKO_CONTINUOUS);
 		}
+#endif
 		break;
 
 	case SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_CBM_CFM:
@@ -621,6 +628,7 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		break;
 	}
 
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
 	if (combined_clock()) {
 		if (dir == 0) {			
 			/* Set the rx clock period to the tx clock period */
@@ -632,6 +640,7 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			tcmr |= rcmr & 0xff000000;
 		}		
 	}
+#endif
 
 	pr_debug("atmel_ssc_hw_params: format=%d rate=%d channels=%d bits=%d "
 		 "RCMR=%08x RFMR=%08x TCMR=%08x TFMR=%08x\n",
@@ -667,8 +676,10 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			return ret;
 		}
 
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
 		if (combined_clock())
 			atomic_set(&ssc_p->substreams_running, 0);
+#endif
 
 		ssc_p->initialized = 1;
 	}
@@ -706,6 +717,7 @@ static int atmel_ssc_prepare(struct snd_pcm_substream *substream,
 
 	ssc_writel(ssc_p->ssc->regs, CR, dma_params->mask->ssc_enable);
 
+#ifdef CONFIG_SND_ATMEL_SOC_COMBINED_CLOCK
 	if (combined_clock()) {
 		atomic_inc(&ssc_p->substreams_running);
 		
@@ -721,6 +733,7 @@ static int atmel_ssc_prepare(struct snd_pcm_substream *substream,
 				ssc_writel(ssc_p->ssc->regs, THR, 0);
 		}
 	}
+#endif
 
 	pr_debug("%s enabled SSC_SR=0x%08x\n",
 			dir ? "receive" : "transmit",
