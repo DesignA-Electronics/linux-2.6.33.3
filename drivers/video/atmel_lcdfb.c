@@ -566,6 +566,8 @@ static int atmel_lcdfb_set_par(struct fb_info *info)
 	value = (info->var.vsync_len - 1) << ATMEL_LCDC_VPW_OFFSET;
 	value |= info->var.upper_margin << ATMEL_LCDC_VBP_OFFSET;
 	value |= info->var.lower_margin;
+	/* Bit 31 needs to be set on the AT91SAM9G45 */
+	value |= (1<<31);
 	dev_dbg(info->device, "  * LCDTIM1 = %08lx\n", value);
 	lcdc_writel(sinfo, ATMEL_LCDC_TIM1, value);
 
