@@ -262,7 +262,7 @@ static inline void atmel_lcdfb_free_video_memory(struct atmel_lcdfb_info *sinfo)
 /**
  *	atmel_lcdfb_alloc_video_memory - Allocate framebuffer memory
  *	@sinfo: the frame buffer to allocate memory for
- * 	
+ *
  * 	This function is called only from the atmel_lcdfb_probe()
  * 	so no locking by fb_info->mm_lock around smem_len setting is needed.
  */
@@ -656,6 +656,13 @@ static int atmel_lcdfb_setcolreg(unsigned int regno, unsigned int red,
 		red = green = blue = (19595 * red + 38470 * green
 				      + 7471 * blue) >> 16;
 
+        if (sinfo->invert) {
+                red   = 0xffff - red;
+                green = 0xffff - green;
+                blue  = 0xffff - blue;
+        }
+
+
 	switch (info->fix.visual) {
 	case FB_VISUAL_TRUECOLOR:
 		if (regno < 16) {
@@ -816,6 +823,7 @@ static int __init atmel_lcdfb_probe(struct platform_device *pdev)
 		sinfo->smem_len = pdata_sinfo->smem_len;
 		sinfo->lcdcon_is_backlight = pdata_sinfo->lcdcon_is_backlight;
 		sinfo->lcd_wiring_mode = pdata_sinfo->lcd_wiring_mode;
+                sinfo->invert = pdata_sinfo->invert;
 	} else {
 		dev_err(dev, "cannot get default configuration\n");
 		goto free_info;

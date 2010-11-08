@@ -15,6 +15,9 @@ config FB_LOGO_EXTRA
 	depends on FB=y
 	default y if SPU_BASE
 
+config LOGO_CENTERED
+	bool "Center logo on the screen"
+
 config LOGO_LINUX_MONO
 	bool "Standard black and white Linux logo"
 	default y
@@ -25,6 +28,10 @@ config LOGO_LINUX_VGA16
 
 config LOGO_LINUX_CLUT224
 	bool "Standard 224-color Linux logo"
+	default y
+
+config LOGO_GURNARD_CLUT224
+	bool "Gurnard 224-colour Linux logo"
 	default y
 
 config LOGO_BLACKFIN_VGA16
