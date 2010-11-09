@@ -42,6 +42,13 @@ config AT91_ADC
 	default n
 	help
 	    Provides a simple sysfs based interface to the AT91 SOC ADCs
+
+config AT91_BOOTCOUNT
+	tristate "AT91 Bootcount"
+	depends on ARCH_AT91
+	default n
+	help
+	    sysfs interface to the GPBR based U-Boot bootcount variable  
 	    
 config ATMEL_TCLIB
 	bool "Atmel AT32/AT91 Timer/Counter Library"
