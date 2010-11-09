@@ -216,6 +216,8 @@ static int __init hammerhead_init(void)
 		goto fail_free;
 	}
 
+	atmel_ssc_setup_combined_clock(ssc_p, ATMEL_SSC_CLOCK_RX_ON_TX);
+
 	pr_info("Hammerhead audio intitialised\n");
 	return 0;
 

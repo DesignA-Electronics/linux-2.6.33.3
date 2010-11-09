@@ -102,6 +102,8 @@ struct atmel_ssc_state {
 	u32 ssc_imr;
 };
 
+#define ATMEL_SSC_CLOCK_RX_ON_TX	1
+#define ATMEL_SSC_CLOCK_TX_ON_RX	2
 
 struct atmel_ssc_info {
 	char *name;
@@ -115,8 +117,14 @@ struct atmel_ssc_info {
 	unsigned short rcmr_period;
 	struct atmel_pcm_dma_params *dma_params[2];
 	struct atmel_ssc_state ssc_state;
+
+	/* For combined clocks */
+	int combined_clock;
 	atomic_t substreams_running;
 };
 extern struct snd_soc_dai atmel_ssc_dai[];
+
+extern void atmel_ssc_setup_combined_clock(struct atmel_ssc_info *ssc_p,
+					   int combined_clock);
 
 #endif /* _AT91_SSC_DAI_H */
