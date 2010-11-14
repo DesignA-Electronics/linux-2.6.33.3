@@ -45,8 +45,9 @@
  * The codec clock is provided externally either from a dedicated
  * crystal or from the FPGA
  */
-#define CODEC_CLK_RATE	24000000
-#define MCK_RATE	12000000
+#define CODEC_CLK_RATE    24000000
+#define MCK_RATE          12000000
+#define HAMMERHEAD_DAIFMT (SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBS_CFS)
 
 static int hammerhead_startup(struct snd_pcm_substream *substream)
 {
@@ -81,14 +82,12 @@ static int hammerhead_hw_params(struct snd_pcm_substream *substream,
 	int cmr_div, period;
 
 	/* set codec DAI configuration */
-	ret = snd_soc_dai_set_fmt(codec_dai, (SND_SOC_DAIFMT_I2S |
-					      SND_SOC_DAIFMT_CBS_CFS));
+	ret = snd_soc_dai_set_fmt(codec_dai, HAMMERHEAD_DAIFMT);
 	if (ret < 0)
 		return ret;
 
 	/* set cpu DAI configuration */
-	ret = snd_soc_dai_set_fmt(cpu_dai, (SND_SOC_DAIFMT_I2S |
-					    SND_SOC_DAIFMT_CBS_CFS));
+	ret = snd_soc_dai_set_fmt(cpu_dai, HAMMERHEAD_DAIFMT);
 	if (ret < 0)
 		return ret;
 
