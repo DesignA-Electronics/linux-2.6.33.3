@@ -357,14 +357,17 @@ static void __init hammerhead_board_init(void)
 	/* NAND */
 	at91_add_device_nand(&hammerhead_nand_data);
 	/* I2C */
-	at91_add_device_i2c(0, hammerhead_i2c0_devices, ARRAY_SIZE(hammerhead_i2c0_devices));
-	at91_add_device_i2c(1, hammerhead_i2c1_devices, ARRAY_SIZE(hammerhead_i2c1_devices));
+	at91_add_device_i2c(0, hammerhead_i2c0_devices,
+			    ARRAY_SIZE(hammerhead_i2c0_devices));
+	at91_add_device_i2c(1, hammerhead_i2c1_devices,
+			    ARRAY_SIZE(hammerhead_i2c1_devices));
 	/* SPI */
-	at91_add_device_spi(hammerhead_spi_devices, ARRAY_SIZE(hammerhead_spi_devices));
-	/* Audio */
-	at91_add_device_ssc(AT91SAM9G45_ID_SSC0, (ATMEL_SSC_TF | ATMEL_SSC_TX |
-						  ATMEL_SSC_TD | ATMEL_SSC_RK |
-						  ATMEL_SSC_RD));
+	at91_add_device_spi(hammerhead_spi_devices,
+			    ARRAY_SIZE(hammerhead_spi_devices));
+	/* Audio - RX is on TX Clock*/
+	at91_add_device_ssc(AT91SAM9G45_ID_SSC0,
+			    (ATMEL_SSC_TF | ATMEL_SSC_TX |
+			     ATMEL_SSC_TD | ATMEL_SSC_RD));
 	/* adc */
 	at91_add_device_adc(&hammerhead_adc_data);
 #if 0
