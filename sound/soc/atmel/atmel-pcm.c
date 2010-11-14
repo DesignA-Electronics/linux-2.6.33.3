@@ -38,6 +38,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/atmel_pdc.h>
 #include <linux/atmel-ssc.h>
+#include <linux/gpio.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -236,6 +237,18 @@ static int atmel_pcm_trigger(struct snd_pcm_substream *substream,
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
+#ifdef CONFIG_MACH_HAMMERHEAD
+		/* 		   
+		 * Sometimes the left and right channels get swapped on
+		 * playback (possible silicon bug). We wait for LRCLK to go
+		 * low before starting the DMA
+		 *
+		 * FIXME - This is a hack solution only
+		 */
+		while (!at91_get_gpio_value(AT91_PIN_PD1));
+		while (at91_get_gpio_value(AT91_PIN_PD1));
+#endif
+
 		prtd->period_ptr = prtd->dma_buffer;
 
 		ssc_writex(params->ssc->regs, params->pdc->xpr,
