@@ -143,6 +143,7 @@ static irqreturn_t atmel_tsadcc_interrupt(int irq, void *dev)
 				   ATMEL_TSADCC_EOC(3) | ATMEL_TSADCC_NOCNT);
 		atmel_tsadcc_write(ATMEL_TSADCC_IER, ATMEL_TSADCC_PENCNT);
 
+                input_report_abs(input_dev, ABS_PRESSURE, 0);
 		input_report_key(input_dev, BTN_TOUCH, 0);
 		ts_dev->bufferedmeasure = 0;
 		input_sync(input_dev);
@@ -168,6 +169,7 @@ static irqreturn_t atmel_tsadcc_interrupt(int irq, void *dev)
 			 * Always report previous measurement */
 			input_report_abs(input_dev, ABS_X, ts_dev->prev_absx);
 			input_report_abs(input_dev, ABS_Y, ts_dev->prev_absy);
+                        input_report_abs(input_dev, ABS_PRESSURE, 255);
 			input_report_key(input_dev, BTN_TOUCH, 1);
 			input_sync(input_dev);
 		} else
@@ -330,6 +332,7 @@ static int __devinit atmel_tsadcc_probe(struct platform_device *pdev)
 	__set_bit(EV_ABS, input_dev->evbit);
 	input_set_abs_params(input_dev, ABS_X, 0, 0x3FF, 0, 0);
 	input_set_abs_params(input_dev, ABS_Y, 0, 0x3FF, 0, 0);
+        input_set_abs_params(input_dev, ABS_PRESSURE, 0, 255, 0, 0);
 
 	input_set_capability(input_dev, EV_KEY, BTN_TOUCH);
 
