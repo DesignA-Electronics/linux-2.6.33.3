@@ -469,8 +469,14 @@ static int fb_show_logo_line(struct fb_info *info, int rotate,
 	}
 
 #ifdef CONFIG_LOGO_CENTERED
-        image.dx = (info->var.xres - fb_logo.logo->width) / 2;
-        image.dy = (info->var.yres - fb_logo.logo->height) / 2;
+        image.dx = (info->var.xres - logo->width) / 2;
+        /* FIXME:
+         * Can't vertically center it, as the console text lines
+         * down the bottom will cut it off. How to disable those,
+         * but still have logo support?
+         * image.dy = (info->var.yres - logo->height) / 2;
+         */
+        image.dy = 0;
         n = 1;
 #else
 	image.dx = 0;
