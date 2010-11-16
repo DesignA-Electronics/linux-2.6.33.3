@@ -1,7 +1,10 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 33
-EXTRAVERSION = .7
+EXTRAVERSION = .3
+# This is actually 2.6.33.7, but we keep calling it 2.6.33.3 to avoid
+# breaking older projects
+#EXTRAVERSION = .7
 NAME = Man-Eating Seals of Antiquity
 
 # *DOCUMENTATION*

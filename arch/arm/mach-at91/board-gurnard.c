@@ -38,6 +38,10 @@
 #include "sam9_smc.h"
 #include "generic.h"
 
+#define GURNARD_REVISION 1
+
+#define PWR_HOLD_GPIO   AT91_PIN_PB16
+
 #define FPGA_IRQ        AT91SAM9G45_ID_IRQ0
 #define FPGA_IRQ_LEVEL  IRQ_TYPE_LEVEL_LOW
 
@@ -78,6 +82,13 @@ static struct map_desc fpga_io_desc[] __initdata = {
         },
 };
 
+/* Power hold */
+static void gurnard_poweroff(void)
+{
+        at91_sys_write(AT91_SHDW_CR, AT91_SHDW_KEY | AT91_SHDW_SHDW);
+        at91_set_gpio_output(PWR_HOLD_GPIO, 0);
+}
+
 static void __init gurnard_map_io(void)
 {
 	/* Initialize processor: 12.000 MHz crystal */
@@ -91,6 +102,8 @@ static void __init gurnard_map_io(void)
 			   ATMEL_UART_CTS | ATMEL_UART_RTS);
 	at91_register_uart(AT91SAM9G45_ID_US1, 2,
 			   ATMEL_UART_CTS | ATMEL_UART_RTS);
+
+        pm_power_off = gurnard_poweroff;
 
 	/* set serial console to ttyS0 (ie, DBGU) */
 	at91_set_serial_console(0);
@@ -323,9 +336,9 @@ static struct resource fpga_nand_resources[] = {
 	},
         [1] = { /* Data registers */
                 .start  = FPGA_NAND_CTRL_PHYS + 0x00800000,
-                /* Make it a large (ie: 4k) window, so we can do stm/rdm
+                /* Make it a large (ie: 32k) window, so we can do stm/rdm
                  * commands for better speed */
-                .end    = FPGA_NAND_CTRL_PHYS + 0x00801000 - 1,
+                .end    = FPGA_NAND_CTRL_PHYS + 0x00808000 - 1,
                 .flags  = IORESOURCE_MEM,
         },
         [2] = { /* This is not actually used */
@@ -348,7 +361,7 @@ static struct fb_videomode at91_tft_vga_modes[] = {
 	{
 		.name           = "Sharp LQ043T3DX0A",
 		.refresh	= 50,
-		.xres		= 480,		
+		.xres		= 480,
                 .yres		= 272,
 		.pixclock	= KHZ2PICOS(9000),
 
@@ -385,7 +398,12 @@ static struct atmel_lcdfb_info __initdata gurnard_lcdc_data = {
 	.default_lcdcon2		= AT91SAM9G45_DEFAULT_LCDCON2,
 	.default_monspecs		= &at91fb_default_monspecs,
 	.guard_time			= 9,
+#if GURNARD_REVISION > 0
 	.lcd_wiring_mode		= ATMEL_LCDC_WIRING_RGB,
+#else
+	.lcd_wiring_mode		= ATMEL_LCDC_WIRING_BGR565,
+#endif
+        .invert                         = 1,
 };
 
 
@@ -506,9 +524,6 @@ static void __init gurnard_fpga_init(void)
         /* FPGA memory timings */
 	sam9_smc_configure(0, &gurnard_fpga_smc_config);
 
-        /* Board detect ADC */
-        at91_add_device_adc(&gurnard_adc_data);
-
         sysfs_create_group(&gurnard_fpga_device.dev.kobj,
                         &fpga_attr_group);
 }
@@ -534,12 +549,15 @@ static void __init gurnard_board_init(void)
 	/* Backlight */
 	at91_set_gpio_output(AT91_PIN_PE1, 1);
 	at91_set_gpio_value(AT91_PIN_PE1, 1);
+        /* Board detect ADC - now done via tsadcc driver */
+        /* at91_add_device_adc(&gurnard_adc_data); */
 	/* Touch Screen */
-	//at91_add_device_tsadcc(&gurnard_tsadcc_data);
+	at91_add_device_tsadcc(&gurnard_tsadcc_data);
 	/* USB HS Host */
 	at91_add_device_usbh_ohci(&gurnard_usbh_hs_data);
 	at91_add_device_usbh_ehci(&gurnard_usbh_hs_data);
 	/* SD */
+        /* Enable to SD power supply */
 	at91_set_gpio_output(AT91_PIN_PA8, 1);
 	at91_set_gpio_value(AT91_PIN_PA8, 0);
 	at91_add_device_mci(0, &gurnard_mmc_data);
