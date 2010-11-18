@@ -57,7 +57,16 @@ static void __init at91_adc_hwinit(struct at91_adc *adc)
         for (i = 0; i < ARRAY_SIZE(adc->data->gpios); i++)
                 if (adc->data->gpios[i] >= 0) {
                         at91_adc_write(adc, AT91_ADC_IER, AT91_ADC_EOC(i));
-                        at91_set_A_periph(adc->data->gpios[i], 0);
+
+			/*
+			 * The first four ADCs are also touchscreen pins and
+			 * use peripheral A mode. The second 4 ADC's (9G45
+			 * only) are configured as gpio inputs with no pullup
+			 */
+			if (i < 4)
+				at91_set_A_periph(adc->data->gpios[i], 0);
+			else
+				at91_set_gpio_input(adc->data->gpios[i], 0);
                 }
 }
 
