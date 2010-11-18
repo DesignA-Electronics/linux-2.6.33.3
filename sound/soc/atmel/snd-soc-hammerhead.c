@@ -135,33 +135,9 @@ static struct snd_soc_ops hammerhead_ops = {
 	.shutdown	= hammerhead_shutdown,
 };
 
-static const struct snd_soc_dapm_widget hammerhead_dapm_widgets[] = {
-	SND_SOC_DAPM_HP("Headphone Jack", NULL),
-	SND_SOC_DAPM_MIC("Mic Jack", NULL),
-};
-
-static const struct snd_soc_dapm_route intercon[] = {
-	{"Headphone Jack", NULL, "LHPOUT"},
-	{"Headphone Jack", NULL, "RHPOUT"},
-	{"MICIN",          NULL, "Mic Jack"},
-};
-
 static int hammerhead_tlv320_init(struct snd_soc_codec *codec)
 {
-	int i;
-
-	/* Add specific widgets */
-	for (i = 0; i < ARRAY_SIZE(hammerhead_dapm_widgets); i++)
-		snd_soc_dapm_new_control(codec, &hammerhead_dapm_widgets[i]);
-
-	/* Set up specific audio path interconnects */
-	snd_soc_dapm_add_routes(codec, intercon, ARRAY_SIZE(intercon));
-
-	snd_soc_dapm_enable_pin(codec, "Headphone Jack");
-	snd_soc_dapm_enable_pin(codec, "Mic Jack");
-
 	snd_soc_dapm_sync(codec);
-
 	return 0;
 }
 
