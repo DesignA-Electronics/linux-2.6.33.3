@@ -506,7 +506,6 @@ static int aic26_spi_probe(struct spi_device *spi)
 
 	/* Audio Control 3 (master mode, fsref rate) */
 	reg = aic26_reg_read(&aic26->codec, AIC26_REG_AUDIO_CTRL3);
-	dev_err(&spi->dev, "AUDIO_CTRL3 = %.4x\n", reg);
 	reg &= ~0xf800;
 	reg |= 0x0800; /* set master mode */
 	aic26_reg_write(&aic26->codec, AIC26_REG_AUDIO_CTRL3, reg);
