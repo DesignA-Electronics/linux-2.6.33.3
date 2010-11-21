@@ -126,7 +126,8 @@ static void gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
          * These spurious interrupts can happen during the programming
          * of the FPGA
          **/
-        if ((FPGA_ID & 0xffff0000) != 0x000d0000) {
+        if ((FPGA_ID & 0xffff0000) != 0x000d0000 &&
+            (FPGA_ID & 0xffff0000) != 0x00010000) {
                 pr_err("Gurnard FPGA IRQ, but FPGA not programmed\n");
                 return;
         }
@@ -193,6 +194,7 @@ static struct at91_eth_data __initdata gurnard_macb_data = {
         .phy_mask       = ~(1 << 0), // Phy 0x0
 };
 
+#if 0
 /**
  * Board detection ADC
  */
@@ -209,6 +211,7 @@ static struct at91_adc_data gurnard_adc_data = {
         .startup = 12,
         .sample = 12,
 };
+#endif
 
 /* LEDS */
 static struct gpio_led gurnard_leds[] = {
@@ -310,14 +313,15 @@ static void __init gurnard_add_device_nand(void)
 	at91_add_device_nand(&gurnard_nand_data);
 }
 
-/* FPGA SPI device for user-space programming */
 static struct spi_board_info gurnard_spi_board_info[] __initdata = {
 	{
+                /* FPGA SPI device for user-space programming */
 		.modalias = "spidev",
 		.max_speed_hz = 3000000,
 		.bus_num = 0,
 		.chip_select = 0,
 	},
+#if 0
         {
                 .modalias = "lq043t3",
                 .max_speed_hz = 10000000, /* 20 MHz max clock */
@@ -325,6 +329,7 @@ static struct spi_board_info gurnard_spi_board_info[] __initdata = {
                 .chip_select = 1,
                 .controller_data = AT91_PIN_PA9, /* CS pin */
         },
+#endif
 };
 
 /* FPGA NAND access */

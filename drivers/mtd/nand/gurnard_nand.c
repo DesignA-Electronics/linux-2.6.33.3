@@ -39,10 +39,13 @@
 #define RAID_ADDR 3 /* Address toe access in the FPGA to get both devices */
 
 /* Display debugging each time we do a low-level NAND access */
-//#define RAW_ACCESS_DEBUG
+// #define RAW_ACCESS_DEBUG
 
 /* Check that the Linux ECC calculations match the FPGA ones */
 #define VERIFY_FPGA_ECC_CALC
+
+/* Actually use the FPGA ECC results */
+#define USE_FPGA_ECC
 
 /* The first 4-bytes (32-bit word) of the ecc is the bad-block marker
  * for each of the 4 8-bit devices. We then have 192 bytes of ECC,
@@ -140,6 +143,11 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host, unsigned
        reg_writel(MASK_NCE, CFG_SET);
        if (chip_mask)
                reg_writel((chip_mask & 0x3) << NCE_SHIFT, CFG_CLR);
+       if (((reg_readl(CFG_SET) & MASK_NCE) >> NCE_SHIFT) !=
+               (~(chip_mask) & 0x3))
+                dev_err(&host->pdev->dev,
+                        "Unable to apply NCE settings (mask=%d reg=0x%x)\n",
+                                chip_mask, reg_readl(CFG_SET));
 }
 
 static inline void gurnard_busy_wait(struct gurnard_nand_host *host)
@@ -181,6 +189,16 @@ static inline void gurnard_write_address(struct gurnard_nand_host *host, uint8_t
 
 static inline void gurnard_read_buf(struct gurnard_nand_host *host, uint32_t *buf, uint32_t buflen)
 {
+#if 0
+        /* Make sure that we're not accidentally reading from both 
+         * devices at once. This will cause bus contention
+         */
+        if ((reg_readl(CFG_SET) & MASK_NCE) == 0) {
+                dev_err(&host->pdev->dev,
+                        "Attempt to read from NAND chips with both selected\n");
+                dump_stack();
+        }
+#endif
 /* FIXME: Issue reading this way from the FPGA.
  * Smarter reading, where we read as they become available rather
  * than wait until until all the data is in the FPGA before we
@@ -203,13 +221,6 @@ static inline void gurnard_read_buf(struct gurnard_nand_host *host, uint32_t *bu
                 }
         } while (read != buflen);
 #endif
-#if 0
-        int i;
-        reg_writel(buflen - 1, BUFF_LEN);
-        gurnard_busy_wait(host);
-        for (i = 0; i < buflen >> 2; i++)
-                buf[i] = readl(host->data_base);
-#endif
 #if 1
         reg_writel(buflen - 1, BUFF_LEN);
         gurnard_busy_wait(host);
@@ -219,10 +230,10 @@ static inline void gurnard_read_buf(struct gurnard_nand_host *host, uint32_t *bu
 
 static inline void gurnard_write_buf(struct gurnard_nand_host *host, const uint32_t *buf, uint32_t buflen)
 {
-        int i;
-        for (i = 0; i < buflen >> 2; i++)
-                writel(buf[i], host->data_base);
-        //writesl(host->data_base, buf, buflen >> 2);
+        //int i;
+        //for (i = 0; i < buflen >> 2; i++)
+                //writel(buf[i], host->data_base);
+        writesl(host->data_base, buf, buflen >> 2);
         gurnard_busy_wait(host);
 
 }
@@ -396,19 +407,23 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
         uint8_t *nand_ecc = &oob[mtd->ecclayout->eccpos[0]];
         int i;
 
+#ifndef USE_FPGA_ECC
+        /* FIXME: We seem to have an odd ECC issue in the FPGA,
+         * but it is intermittent, so we're simply replacing
+         * its values with the CPU calculated ones for now */
+#warning "Overwriting the FPGA ECC with the one from the CPU"
+        for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
+                __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], ECC_CHUNK_SIZE,
+                                calc_ecc);
+                memcpy(&fpga_ecc[i * ECC_CALC_SIZE], calc_ecc, ECC_CALC_SIZE);
+        }
+#endif
 #ifdef VERIFY_FPGA_ECC_CALC
         uint8_t calc_ecc[ECC_CALC_SIZE];
         //nand_ecc[0] ^= 0x1; // put a single bit error into the ecc we get back from the device
         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
                 __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], ECC_CHUNK_SIZE,
                                 calc_ecc);
-#if 0
-                /* FIXME: We seem to have an odd ECC issue in the FPGA,
-                 * but it is intermittent, so we're simply replacing
-                 * its values with the CPU calculated ones for now */
-#warning "Overwriting the FPGA ECC with the one from the CPU"
-                memcpy(&fpga_ecc[i * ECC_CALC_SIZE], calc_ecc, ECC_CALC_SIZE);
-#endif
                 if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE], calc_ecc,
                                         ECC_CALC_SIZE) != 0) {
                         dev_err(&host->pdev->dev,
@@ -436,7 +451,7 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
          * one of them at least is guaranteed to not be */
         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
                 int ret;
-                printk("Checking block %d, %d, %d\n", i, i * ECC_CALC_SIZE, 
+                printk("Checking block %d, %d, %d\n", i, i * ECC_CALC_SIZE,
                                 i * ECC_CHUNK_SIZE);
                 if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE],
                            &nand_ecc[i * ECC_CALC_SIZE], ECC_CALC_SIZE) == 0)
@@ -498,15 +513,15 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                 gurnard_select_chips(host, 1 << 0);
         else
                 gurnard_select_chips(host, stack->device_addr);
-        offset_to_page(from, addr);
+
         /* OOB only read, so skip past the page to the oob */
-        if (!buf) {
-                addr[0] = mtd->writesize / 4;
-                addr[1] = (mtd->writesize / 4) >> 8;
-        }
+        if (!buf)
+                from += mtd->writesize;
+
+        offset_to_page(from, addr);
 #ifdef RAW_ACCESS_DEBUG
-        printk("read: 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
-                        from,
+        printk("read: dev=0x%x 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
+                        stack->device_addr, from,
                         addr[4], addr[3], addr[2], addr[1], addr[0],
                         buf ? " data" : "", oob ? " oob" : "");
 #endif
@@ -563,7 +578,8 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         uint32_t status;
 
 #ifdef RAW_ACCESS_DEBUG
-        printk("write: 0x%llx%s%s%s\n", to,
+        printk("write: dev=0x%x 0x%llx%s%s%s\n", 
+                        stack->device_addr, to,
                         buf ? " data" : "", oob ? " oob" : "",
                         auto_ecc ? " auto": "");
 #endif
@@ -585,12 +601,12 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
 #endif
 
         gurnard_select_chips(host, stack->device_addr);
+
+        /* OOB only write, so skip past the page to the oob */
+        if (!buf)
+                to += mtd->writesize;
+
         offset_to_page(to, addr);
-        /* OOB only read, so skip past the page to the oob */
-        if (!buf) {
-                addr[0] = (mtd->writesize / 4);
-                addr[1] = (mtd->writesize / 4) >> 8;
-        }
 
         gurnard_write_command(host, NAND_CMD_SEQIN);
         gurnard_write_address(host, addr, 5);
@@ -598,11 +614,20 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         if (buf) {
                 gurnard_write_buf(host, (uint32_t *)buf, mtd->writesize);
                 if (auto_ecc && oob) {
-                        uint32_t *ecc;
                         int i;
+#ifdef USE_FPGA_ECC
+                        uint32_t *ecc;
                         ecc = (uint32_t *)&oob[mtd->ecclayout->eccpos[0]];
+
                         for (i = 0; i < mtd->ecclayout->eccbytes / 4; i++)
                                 *ecc++ = reg_readl(ECC);
+#else
+                        for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++)
+                                __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], 
+                                                ECC_CHUNK_SIZE, 
+                                                &oob[mtd->ecclayout->eccpos[0] +
+                                                     i * ECC_CALC_SIZE]);
+#endif
                 }
         }
         if (oob)
@@ -660,7 +685,7 @@ static int gurnard_nand_erase_block(struct gurnard_nand_host *host,
         uint32_t status;
 
 #ifdef RAW_ACCESS_DEBUG
-        printk("erase: 0x%llx\n", block_addr);
+        printk("erase block: 0x%llx\n", block_addr);
 #endif
 
         offset_to_block(block_addr, addr);
@@ -694,6 +719,11 @@ static int gurnard_nand_erase(struct mtd_info *mtd, struct erase_info *instr)
                                 cur_addr);
                 return -EINVAL;
         }
+
+#ifdef RAW_ACCESS_DEBUG
+        printk("erase start: dev=0x%x start=0x%llx len=0x%llx\n",
+                        stack->device_addr, instr->addr, instr->len);
+#endif
 
         gurnard_select_chips(host, stack->device_addr);
         while (erased < instr->len && cur_addr < mtd->size && ret == 0) {

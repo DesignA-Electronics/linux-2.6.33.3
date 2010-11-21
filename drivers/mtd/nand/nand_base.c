@@ -2351,6 +2351,13 @@ int nand_erase_nand(struct mtd_info *mtd, struct erase_info *instr,
 	instr->state = MTD_ERASING;
 
 	while (len) {
+                /* Gurnard erases bad blocks on the RAID device on occasion
+                 * to allow it to synchronise devices. This is done where
+                 * bad blocks are being falsly marked bad on one device to
+                 * mirror them on another. These false blocks can be safely
+                 * erased when we re-pair
+                 */
+#ifndef CONFIG_MTD_NAND_GURNARD
 		/*
 		 * heck if we have a bad block, we do not erase bad blocks !
 		 */
@@ -2361,6 +2368,7 @@ int nand_erase_nand(struct mtd_info *mtd, struct erase_info *instr,
 			instr->state = MTD_ERASE_FAILED;
 			goto erase_exit;
 		}
+#endif
 
 		/*
 		 * Invalidate the page cache, if we erase the block which
