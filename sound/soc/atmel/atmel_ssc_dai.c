@@ -583,7 +583,7 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		break;
 	}
 
-	if (ssc_p->combined_clock == ATMEL_SSC_CLOCK_RX_ON_TX && dir == 1) {
+	if (ssc_p->combined_clock == ATMEL_SSC_CLOCK_RX_ON_TX) {
 		/* RX clock is always running */
 		rcmr &= ~SSC_BF(RCMR_CKO, 0x7);
 		rcmr |=  SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);
@@ -603,9 +603,6 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		/* Set the TX clock period to the RX clock period */
 		tcmr &= 0x00ffffff;
 		tcmr |= rcmr & 0xff000000;
-
-		pr_debug("Setup capture using SSC TX clock\n");
-
 	}
 
 	pr_debug("atmel_ssc_hw_params: format=%d rate=%d channels=%d bits=%d "
