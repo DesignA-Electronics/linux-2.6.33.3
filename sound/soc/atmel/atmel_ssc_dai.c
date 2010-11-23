@@ -600,9 +600,15 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 		rcmr &= ~SSC_BF(RCMR_START, 0xf);
 		rcmr |=  SSC_BF(RCMR_START, SSC_START_TX_RX);
 		
-		/* Set the TX clock period to the RX clock period */
-		tcmr &= 0x00ffffff;
-		tcmr |= rcmr & 0xff000000;
+		if (dir == 1) {
+			/* 
+			 * Set the TX clock period to the RX clock period 
+			 * FIXME - Is this okay if we are already doing TX?
+			 */
+			tcmr &= 0x00ffffff;
+			tcmr |= rcmr & 0xff000000;
+		}
+		
 	}
 
 	pr_debug("atmel_ssc_hw_params: format=%d rate=%d channels=%d bits=%d "
