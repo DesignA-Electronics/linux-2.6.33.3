@@ -190,7 +190,7 @@ static inline void gurnard_write_address(struct gurnard_nand_host *host, uint8_t
 static inline void gurnard_read_buf(struct gurnard_nand_host *host, uint32_t *buf, uint32_t buflen)
 {
 #if 0
-        /* Make sure that we're not accidentally reading from both 
+        /* Make sure that we're not accidentally reading from both
          * devices at once. This will cause bus contention
          */
         if ((reg_readl(CFG_SET) & MASK_NCE) == 0) {
@@ -267,6 +267,17 @@ static inline void offset_to_page(uint64_t from, uint8_t *addr)
         addr[2] = from;
         addr[3] = from >> 8;
         addr[4] = from >> 16;
+}
+
+/**
+ * Jump a 5-byte address to the OOB region
+ */
+static inline void addr_to_oob(uint8_t *addr)
+{
+        /* FIXME: should this be 
+         * addr[1] = (pagesize / 4) >> 8;
+         */
+        addr[1] = 0x10;
 }
 
 /* Converts the 64-bit byte offset within the nand device to the
@@ -514,11 +525,12 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
         else
                 gurnard_select_chips(host, stack->device_addr);
 
+        offset_to_page(from, addr);
+
         /* OOB only read, so skip past the page to the oob */
         if (!buf)
-                from += mtd->writesize;
+                addr_to_oob(addr);
 
-        offset_to_page(from, addr);
 #ifdef RAW_ACCESS_DEBUG
         printk("read: dev=0x%x 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
                         stack->device_addr, from,
@@ -577,13 +589,6 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         int ret = 0;
         uint32_t status;
 
-#ifdef RAW_ACCESS_DEBUG
-        printk("write: dev=0x%x 0x%llx%s%s%s\n", 
-                        stack->device_addr, to,
-                        buf ? " data" : "", oob ? " oob" : "",
-                        auto_ecc ? " auto": "");
-#endif
-
         if (to >= mtd->size)
                 return -EINVAL;
         if (to & (mtd->writesize - 1)) {
@@ -602,11 +607,19 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
 
         gurnard_select_chips(host, stack->device_addr);
 
+        offset_to_page(to, addr);
+
         /* OOB only write, so skip past the page to the oob */
         if (!buf)
-                to += mtd->writesize;
+                addr_to_oob(addr);
 
-        offset_to_page(to, addr);
+#ifdef RAW_ACCESS_DEBUG
+        printk("write: dev=0x%x 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
+                        stack->device_addr, to,
+                        addr[4], addr[3], addr[2], addr[1], addr[0],
+                        buf ? " data" : "", oob ? " oob" : "");
+#endif
+
 
         gurnard_write_command(host, NAND_CMD_SEQIN);
         gurnard_write_address(host, addr, 5);
@@ -623,8 +636,8 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
                                 *ecc++ = reg_readl(ECC);
 #else
                         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++)
-                                __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], 
-                                                ECC_CHUNK_SIZE, 
+                                __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE],
+                                                ECC_CHUNK_SIZE,
                                                 &oob[mtd->ecclayout->eccpos[0] +
                                                      i * ECC_CALC_SIZE]);
 #endif
