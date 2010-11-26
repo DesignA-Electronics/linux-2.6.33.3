@@ -213,8 +213,9 @@ static struct at91_adc_data gurnard_adc_data = {
 };
 #endif
 
+#if 0 /* Only available on tiny gurnard */
 /* LEDS */
-static struct gpio_led gurnard_leds[] = {
+static struct gpio_led tiny_gurnard_leds[] = {
         {	/* power LED */
                 .name			= "heartbeat",
                 .gpio			= AT91_PIN_PB27,
@@ -222,6 +223,7 @@ static struct gpio_led gurnard_leds[] = {
                 .default_trigger	= "heartbeat",
         },
 };
+#endif
 
 /*
  * NAND flash
@@ -544,7 +546,7 @@ static void __init gurnard_board_init(void)
         /* FPGA */
         gurnard_fpga_init();
 	/* LEDs */
-	at91_gpio_leds(gurnard_leds, ARRAY_SIZE(gurnard_leds));
+	//at91_gpio_leds(tiny_gurnard_leds, ARRAY_SIZE(tiny_gurnard_leds));
         /* FPGA & LCD attached to the SPI bus */
 	at91_add_device_spi(gurnard_spi_board_info,
 		ARRAY_SIZE(gurnard_spi_board_info));
