@@ -18,6 +18,7 @@
 #include <asm/mach/map.h>
 #include <mach/at91sam9g45.h>
 #include <mach/at91_pmc.h>
+#include <mach/at91_rtc.h>
 #include <mach/at91_rstc.h>
 #include <mach/at91_shdwc.h>
 
@@ -351,6 +352,9 @@ void __init at91sam9g45_init_interrupts(unsigned int priority[NR_AIC_IRQS])
 {
 	if (!priority)
 		priority = at91sam9g45_default_irq_priority;
+
+        /* Disable the RTC IRQs to avoid spurious startup events */
+        at91_sys_write(AT91_RTC_IMR, 0xffffffff);
 
 	/* Initialize the AIC interrupt controller */
 	at91_aic_init(priority);
