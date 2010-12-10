@@ -191,39 +191,7 @@ static void __init gurnard_init_irq(void)
  */
 static struct at91_eth_data __initdata gurnard_macb_data = {
 	.is_rmii	= 1,
-        .phy_mask       = ~(1 << 0), // Phy 0x0
 };
-
-#if 0
-/**
- * Board detection ADC
- */
-static struct at91_adc_data gurnard_adc_data = {
-        .gpios[0] = -1,
-        .gpios[1] = AT91_PIN_PD21,
-        .gpios[2] = -1,
-        .gpios[3] = -1,
-        .gpios[4] = -1,
-        .gpios[5] = -1,
-        .gpios[6] = -1,
-        .gpios[7] = -1,
-        .prescale = 4,
-        .startup = 12,
-        .sample = 12,
-};
-#endif
-
-#if 0 /* Only available on tiny gurnard */
-/* LEDS */
-static struct gpio_led tiny_gurnard_leds[] = {
-        {	/* power LED */
-                .name			= "heartbeat",
-                .gpio			= AT91_PIN_PB27,
-                .active_low		= 1,
-                .default_trigger	= "heartbeat",
-        },
-};
-#endif
 
 /*
  * NAND flash
@@ -497,7 +465,7 @@ static ssize_t fpga_build_date_show(struct device *dev,
                 struct device_attribute *attr, char *buf)
 {
         int year = (FPGA_BUILD_DATE & 0xffff0000) >> 16;
-        int month = (FPGA_BUILD_DATE & 0xff00) >> 8;
+        int month = ((FPGA_BUILD_DATE & 0xff00) >> 8) + 1;
         int day = (FPGA_BUILD_DATE & 0xff);
         return sprintf(buf, "%4.4d-%2.2d-%2.2d\n", year, month, day);
 }
@@ -545,8 +513,6 @@ static void __init gurnard_board_init(void)
 	gurnard_add_device_nand();
         /* FPGA */
         gurnard_fpga_init();
-	/* LEDs */
-	//at91_gpio_leds(tiny_gurnard_leds, ARRAY_SIZE(tiny_gurnard_leds));
         /* FPGA & LCD attached to the SPI bus */
 	at91_add_device_spi(gurnard_spi_board_info,
 		ARRAY_SIZE(gurnard_spi_board_info));
@@ -556,9 +522,7 @@ static void __init gurnard_board_init(void)
 	/* Backlight */
 	at91_set_gpio_output(AT91_PIN_PE1, 1);
 	at91_set_gpio_value(AT91_PIN_PE1, 1);
-        /* Board detect ADC - now done via tsadcc driver */
-        /* at91_add_device_adc(&gurnard_adc_data); */
-	/* Touch Screen */
+	/* Touch Screen & ADC */
 	at91_add_device_tsadcc(&gurnard_tsadcc_data);
 	/* USB HS Host */
 	at91_add_device_usbh_ohci(&gurnard_usbh_hs_data);
