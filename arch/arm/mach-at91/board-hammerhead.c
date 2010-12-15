@@ -103,7 +103,7 @@ static struct usba_platform_data __initdata hammerhead_usba_udc_data = {
 static struct at91_eth_data __initdata hammerhead_macb_data = {
 	/*.phy_irq_pin	= AT91_PIN_PD5,*/
 	.is_rmii	= 1,
-	.phy_mask	= ~(1 << 0x01), /* LAN8720 Phy Address = 0x01 */
+	.phy_mask	= 0x00, /* Auto-detect LAN8720 Phy Address */
 };
 
 /*
