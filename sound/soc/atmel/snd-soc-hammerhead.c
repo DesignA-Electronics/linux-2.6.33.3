@@ -191,7 +191,13 @@ static int __init hammerhead_init(void)
 		goto fail_free;
 	}
 
+#ifdef CONFIG_HAMMERHEAD_REV0
+	printk(KERN_INFO "Hammerhead rev0 audio clocks\n");
+	atmel_ssc_setup_combined_clock(ssc_p, ATMEL_SSC_CLOCK_RK_TF);
+#else
 	atmel_ssc_setup_combined_clock(ssc_p, ATMEL_SSC_CLOCK_RX_ON_TX);
+#endif
+
 
 	pr_info("Hammerhead audio intitialised\n");
 	return 0;

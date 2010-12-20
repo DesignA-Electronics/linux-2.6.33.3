@@ -364,10 +364,19 @@ static void __init hammerhead_board_init(void)
 	/* SPI */
 	at91_add_device_spi(hammerhead_spi_devices,
 			    ARRAY_SIZE(hammerhead_spi_devices));
+
 	/* Audio - RX is on TX Clock*/
+#ifdef CONFIG_HAMMERHEAD_REV0
+	at91_add_device_ssc(AT91SAM9G45_ID_SSC0,
+			    (ATMEL_SSC_TF | ATMEL_SSC_RK |
+			     ATMEL_SSC_TD | ATMEL_SSC_RD));
+			     
+#else
 	at91_add_device_ssc(AT91SAM9G45_ID_SSC0,
 			    (ATMEL_SSC_TF | ATMEL_SSC_TX |
 			     ATMEL_SSC_TD | ATMEL_SSC_RD));
+#endif
+
 	/* adc */
 	at91_add_device_adc(&hammerhead_adc_data);
 #if 0

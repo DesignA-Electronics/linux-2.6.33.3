@@ -104,6 +104,7 @@ struct atmel_ssc_state {
 
 #define ATMEL_SSC_CLOCK_RX_ON_TX	1
 #define ATMEL_SSC_CLOCK_TX_ON_RX	2
+#define ATMEL_SSC_CLOCK_RK_TF		3
 
 struct atmel_ssc_info {
 	char *name;

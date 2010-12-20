@@ -27,6 +27,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#define DEBUG
+
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
@@ -349,10 +351,20 @@ void atmel_ssc_setup_combined_clock(struct atmel_ssc_info *ssc_p,
 
 	ssc_p->combined_clock = combined_clock;
 	for (i = 0; i < ARRAY_SIZE(ssc_dma_params); i++) {
-		if (ssc_p->combined_clock == ATMEL_SSC_CLOCK_TX_ON_RX)
+		switch (ssc_p->combined_clock) {
+		case ATMEL_SSC_CLOCK_TX_ON_RX:
 			ssc_dma_params[i][0].mask->ssc_enable |= SSC_BIT(CR_RXEN);
-		else if (ssc_p->combined_clock == ATMEL_SSC_CLOCK_RX_ON_TX)
+			break;
+
+		case ATMEL_SSC_CLOCK_RX_ON_TX:
 			ssc_dma_params[i][1].mask->ssc_enable |= SSC_BIT(CR_TXEN);
+			break;
+
+		case ATMEL_SSC_CLOCK_RK_TF:
+			ssc_dma_params[i][0].mask->ssc_enable |= SSC_BIT(CR_RXEN);
+			ssc_dma_params[i][1].mask->ssc_enable |= SSC_BIT(CR_TXEN);			
+			break;
+		}
 	}
 }
 EXPORT_SYMBOL(atmel_ssc_setup_combined_clock);
@@ -607,8 +619,34 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 			 */
 			tcmr &= 0x00ffffff;
 			tcmr |= rcmr & 0xff000000;
-		}
+		}		
+
+	} else if (ssc_p->combined_clock == ATMEL_SSC_CLOCK_RK_TF) {
+		/* RX clock always running */
+		rcmr &= ~SSC_BF(RCMR_CKO, 0x7);
+		rcmr |=  SSC_BF(RCMR_CKO, SSC_CKO_CONTINUOUS);
 		
+		/* RX clock is sourced from TK pin */
+		rcmr &= ~SSC_BF(RCMR_CKS, 0x7);
+		rcmr |=  SSC_BF(RCMR_CKS, SSC_CKS_CLOCK);
+		
+		/* Start RX clock on TX start */
+		rcmr &= ~SSC_BF(RCMR_START, 0xf);
+		rcmr |=  SSC_BF(RCMR_START, SSC_START_TX_RX);
+		
+		/* TX clock is always running */
+		tcmr &= ~SSC_BF(TCMR_CKO, 0x7);                 
+		tcmr |=  SSC_BF(TCMR_CKO, SSC_CKO_CONTINUOUS);
+		
+		if (dir == 0) {
+			/* Set the rx clock period to the tx clock period */
+                        rcmr &= 0x00ffffff;
+                        rcmr |= tcmr & 0xff000000;
+                } else {
+                        /* Set the tx clock period to the rx clock period */
+                        tcmr &= 0x00ffffff;
+                        tcmr |= rcmr & 0xff000000;
+                }            
 	}
 
 	pr_debug("atmel_ssc_hw_params: format=%d rate=%d channels=%d bits=%d "
@@ -687,8 +725,9 @@ static int atmel_ssc_prepare(struct snd_pcm_substream *substream,
 	if (ssc_p->combined_clock) {
 		atomic_inc(&ssc_p->substreams_running);
 		
-		if (ssc_p->combined_clock == ATMEL_SSC_CLOCK_RX_ON_TX &&
-		    dir == 1) {
+		if (dir == 1 &&
+		    (ssc_p->combined_clock == ATMEL_SSC_CLOCK_RX_ON_TX ||
+		     ssc_p->combined_clock == ATMEL_SSC_CLOCK_RK_TF)) {
 			/*
 			 * Jump start the dma for capture by loading the 
 			 * trasmit holding register with a dummy value. 
