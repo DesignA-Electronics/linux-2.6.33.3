@@ -359,6 +359,7 @@ static const struct snd_kcontrol_new aic26_snd_controls[] = {
 	SOC_SINGLE("Keyclick amplitude", AIC26_REG_AUDIO_CTRL2, 12, 0x7, 0),
 	SOC_SINGLE("Keyclick frequency", AIC26_REG_AUDIO_CTRL2, 8, 0x7, 0),
 	SOC_SINGLE("Keyclick period", AIC26_REG_AUDIO_CTRL2, 4, 0xf, 0),
+	SOC_SINGLE("Highpower output", AIC26_REG_POWER_CTRL, 12, 1, 0), 
 	SOC_ENUM("Capture Source", aic26_capture_src_enum),
 };
 
@@ -501,8 +502,8 @@ static int aic26_spi_probe(struct spi_device *spi)
 	/* Reset the codec to power on defaults */
 	aic26_reg_write(&aic26->codec, AIC26_REG_RESET, 0xBB00);
 
-	/* Power up CODEC */
-	aic26_reg_write(&aic26->codec, AIC26_REG_POWER_CTRL, 0);
+	/* Power up CODEC - output High power mode */
+	aic26_reg_write(&aic26->codec, AIC26_REG_POWER_CTRL, (1 << 12));
 
 	/* Audio Control 3 (master mode, fsref rate) */
 	reg = aic26_reg_read(&aic26->codec, AIC26_REG_AUDIO_CTRL3);
