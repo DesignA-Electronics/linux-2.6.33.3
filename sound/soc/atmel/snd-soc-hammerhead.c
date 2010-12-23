@@ -36,6 +36,7 @@
 
 #include <mach/hardware.h>
 #include <mach/cpu.h>
+#include <mach/hammerhead.h>
 
 #include "../codecs/tlv320aic26.h"
 #include "atmel-pcm.h"
@@ -47,7 +48,8 @@
  */
 #define CODEC_CLK_RATE    24000000
 #define MCK_RATE          12000000
-#define HAMMERHEAD_DAIFMT (SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBS_CFS)
+
+static int daifmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBM_CFM;
 
 static int hammerhead_startup(struct snd_pcm_substream *substream)
 {
@@ -82,12 +84,12 @@ static int hammerhead_hw_params(struct snd_pcm_substream *substream,
 	int cmr_div, period;
 
 	/* set codec DAI configuration */
-	ret = snd_soc_dai_set_fmt(codec_dai, HAMMERHEAD_DAIFMT);
+	ret = snd_soc_dai_set_fmt(codec_dai, daifmt);
 	if (ret < 0)
 		return ret;
 
 	/* set cpu DAI configuration */
-	ret = snd_soc_dai_set_fmt(cpu_dai, HAMMERHEAD_DAIFMT);
+	ret = snd_soc_dai_set_fmt(cpu_dai, daifmt);
 	if (ret < 0)
 		return ret;
 
@@ -138,6 +140,10 @@ static struct snd_soc_ops hammerhead_ops = {
 static int hammerhead_tlv320_init(struct snd_soc_codec *codec)
 {
 	snd_soc_dapm_sync(codec);
+	if (hammerhead_variant_id() == HAMMERHEAD_BOARD_REV0) {
+		/* Use same LRCLK for playback and capture on rev0 boards */
+		aic26_awds_pwdn(codec, 0);
+	}
 	return 0;
 }
 
@@ -190,14 +196,17 @@ static int __init hammerhead_init(void)
 	if (ret) {
 		goto fail_free;
 	}
-
-#ifdef CONFIG_HAMMERHEAD_REV0
-	printk(KERN_INFO "Hammerhead rev0 audio clocks\n");
-	atmel_ssc_setup_combined_clock(ssc_p, ATMEL_SSC_CLOCK_RK_TF);
-#else
-	atmel_ssc_setup_combined_clock(ssc_p, ATMEL_SSC_CLOCK_RX_ON_TX);
-#endif
-
+	
+	if (hammerhead_variant_id() == HAMMERHEAD_BOARD_REV0) {
+		/*
+		 * On rev0 boards we cannot use the codec as the clock master
+		 * because the PD0 and PD4 pins are not connected as they
+		 * should be. Instead use the CPU as the audio clock master
+		 * and enable combined clocking.
+		 */
+ 		daifmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_CBS_CFS;
+		atmel_ssc_setup_combined_clock(ssc_p, ATMEL_SSC_CLOCK_RK_TF);
+	}
 
 	pr_info("Hammerhead audio intitialised\n");
 	return 0;

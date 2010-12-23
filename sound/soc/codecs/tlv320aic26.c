@@ -453,6 +453,20 @@ static ssize_t aic26_keyclick_set(struct device *dev,
 
 static DEVICE_ATTR(keyclick, 0644, aic26_keyclick_show, aic26_keyclick_set);
 
+void aic26_awds_pwdn(struct snd_soc_codec *codec, int set)
+{
+	int reg;
+
+	reg = aic26_reg_read(codec, AIC26_REG_POWER_CTRL);
+	if (set)
+		reg |= (1 << 5);
+	else
+		reg &= ~(1 << 5);
+
+	aic26_reg_write(codec, AIC26_REG_POWER_CTRL, reg);
+}
+EXPORT_SYMBOL(aic26_awds_pwdn);
+
 /* ---------------------------------------------------------------------
  * SPI device portion of driver: probe and release routines and SPI
  * 				 driver registration.
@@ -502,8 +516,9 @@ static int aic26_spi_probe(struct spi_device *spi)
 	/* Reset the codec to power on defaults */
 	aic26_reg_write(&aic26->codec, AIC26_REG_RESET, 0xBB00);
 
-	/* Power up CODEC - output High power mode */
-	aic26_reg_write(&aic26->codec, AIC26_REG_POWER_CTRL, (1 << 12));
+	/* Power up CODEC - output High power mode, AWDS */
+	aic26_reg_write(&aic26->codec, AIC26_REG_POWER_CTRL, 
+			(1 << 5) | (1 << 12));
 
 	/* Audio Control 3 (master mode, fsref rate) */
 	reg = aic26_reg_read(&aic26->codec, AIC26_REG_AUDIO_CTRL3);

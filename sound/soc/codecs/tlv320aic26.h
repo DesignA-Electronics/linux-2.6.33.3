@@ -93,4 +93,6 @@ enum aic26_wlen {
 extern struct snd_soc_dai aic26_dai;
 extern struct snd_soc_codec_device aic26_soc_codec_dev;
 
+extern void aic26_awds_pwdn(struct snd_soc_codec *codec, int set);
+
 #endif /* _TLV320AIC16_H_ */
