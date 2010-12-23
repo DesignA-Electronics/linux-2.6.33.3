@@ -24,6 +24,7 @@
 #include <linux/input.h>
 #include <linux/leds.h>
 #include <linux/clk.h>
+#include <linux/jiffies.h>
 
 #include <mach/hardware.h>
 #include <video/atmel_lcdc.h>
@@ -41,11 +42,32 @@
 #include <mach/gpio.h>
 #include <mach/at91sam9_smc.h>
 #include <mach/at91_shdwc.h>
+#include <mach/at91_adc.h>
+#include <mach/hammerhead.h>
 
 #include "sam9_smc.h"
 #include "generic.h"
 
 #define PWR_HOLD_GPIO	AT91_PIN_PD10
+
+static int board_variant_id;
+
+const char *hammerhead_variant_id_string(void)
+{
+	switch (board_variant_id) {
+	case HAMMERHEAD_BOARD_REV0: return "Hammerhead rev 0";		
+	case HAMMERHEAD_BOARD_REV1: return "Hammerhead rev 1";		
+	}
+
+	return "Unknown";
+}
+EXPORT_SYMBOL(hammerhead_variant_id_string);
+
+int hammerhead_variant_id(void)
+{
+	return board_variant_id;
+}
+EXPORT_SYMBOL(hammerhead_variant_id);
 
 static void hammerhead_poweroff(void)
 {
@@ -342,8 +364,131 @@ static void __init hammerhead_add_device_buttons(void)
 static void __init hammerhead_add_device_buttons(void) {}
 #endif
 
+struct adc_thresh {
+	unsigned min;
+	unsigned max;
+};
+
+static void __init hammerhead_read_variant_id(void)
+{
+	struct clk *adc_clk;
+	unsigned long timeout;
+	unsigned adc_val, adc_vals[10];
+	void __iomem *regs;
+	int i;
+	struct resource res = {
+		.flags = IORESOURCE_MEM,
+		.start = AT91SAM9G45_BASE_TSC,
+		.end   = AT91SAM9G45_BASE_TSC + 0x100,
+	}; 			 
+	/* FIXME - These have been determined experimentally */
+	struct adc_thresh board_id_table[] = {
+		[HAMMERHEAD_BOARD_UNKNOWN] = {0xfff, 0xfff},
+		[HAMMERHEAD_BOARD_REV0]    = {0x290, 0x2a5},
+		[HAMMERHEAD_BOARD_REV1]    = {0x2d0, 0x2e5},
+	};
+
+	/* 
+	 * ADC Channel 7 (PD27) contains a board variant id. Read it here and
+	 * store the result
+	 */       
+        if (!request_mem_region(res.start, resource_size(&res), "at91_adc")) {
+		pr_err("%s - Failed to request memory region\n", __func__);
+                goto fail;
+	}
+
+	regs = ioremap(res.start, resource_size(&res));
+	if (!regs) {
+		pr_err("%s - Failed to remap memory\n", __func__);
+		goto fail_release_io;
+	}
+
+	adc_clk = clk_get(NULL, "tsc_clk");
+	if (IS_ERR(adc_clk)) {
+		pr_err("%s - Cannot get ADC clock: %ld\n", 
+		       __func__, PTR_ERR(adc_clk));
+		goto fail_unmap_io;
+	}
+
+	clk_enable(adc_clk);
+	at91_set_gpio_input(AT91_PIN_PD27, 0);
+
+	/* Setup the ADC */
+	__raw_writel(AT91_ADC_SWRST, regs + AT91_ADC_CR);
+	__raw_writel((hammerhead_adc_data.prescale <<  8) |
+		     (hammerhead_adc_data.startup  << 16) |
+		     (hammerhead_adc_data.sample   << 24),
+		     regs + AT91_ADC_MR);
+
+	/*
+	 * Read the ADC several times since it takes it some time to
+	 * stabilise properly.
+	 */	
+	for (i = 0; i < ARRAY_SIZE(adc_vals); i++) {
+		__raw_readl(regs + AT91_ADC_LCDR);
+		__raw_writel(1 << 7, regs + AT91_ADC_CHER);
+		__raw_writel(AT91_ADC_START, regs + AT91_ADC_CR);
+		
+		timeout = jiffies + msecs_to_jiffies(1000);
+		while (1) {
+			unsigned status = __raw_readl(regs + AT91_ADC_SR);
+
+			if ((status & AT91_ADC_EOC(7)) &&
+			    (status & AT91_ADC_DRDY)   &&
+			    !(status & AT91_ADC_OVRE(7)))
+				break;
+
+			if (time_after(jiffies, timeout)) {
+				pr_err("%s - Timeout waiting for ADC\n",
+				       __func__);
+				goto fail_put_clk;
+			}
+		}
+		
+		adc_vals[i]  = __raw_readl(regs + AT91_ADC_LCDR);
+		adc_vals[i] &= AT91_ADC_CDR_MASK;
+		__raw_writel(1 << 7, regs + AT91_ADC_CHDR);
+	}
+
+	/* Get the average ADC value */
+	for (adc_val = 0, i = 0; i < ARRAY_SIZE(adc_vals); i++)
+		adc_val += adc_vals[i];
+	adc_val /= ARRAY_SIZE(adc_vals);
+
+	/* Convert the ADC value to a board ID */
+	board_variant_id = -1;
+	for (i = 0; i < ARRAY_SIZE(board_id_table); i++) {
+		if (adc_val >= board_id_table[i].min &&
+		    adc_val <= board_id_table[i].max) {
+			board_variant_id = i;
+			break;
+		}
+	}
+
+	pr_info("Hammerhead: Board variant %s (adc = %.3x)\n",
+		hammerhead_variant_id_string(), adc_val);
+	
+	clk_disable(adc_clk);
+	clk_put(adc_clk);
+	iounmap(regs);
+	release_mem_region(res.start, resource_size(&res));
+	return;
+
+fail_put_clk:
+	clk_disable(adc_clk);
+	clk_put(adc_clk);	
+fail_unmap_io:
+	iounmap(regs);
+fail_release_io:
+	release_mem_region(res.start, resource_size(&res));
+fail:
+	pr_err("Hammerhead: Failed to read board variant id\n");
+}
+
 static void __init hammerhead_board_init(void)
 {
+	hammerhead_read_variant_id();
+
 	/* Serial */
 	at91_add_device_serial();
 	/* USB HS Host */
@@ -366,16 +511,9 @@ static void __init hammerhead_board_init(void)
 			    ARRAY_SIZE(hammerhead_spi_devices));
 
 	/* Audio - RX is on TX Clock*/
-#ifdef CONFIG_HAMMERHEAD_REV0
 	at91_add_device_ssc(AT91SAM9G45_ID_SSC0,
-			    (ATMEL_SSC_TF | ATMEL_SSC_RK |
+			    (ATMEL_SSC_TF | ATMEL_SSC_TX | ATMEL_SSC_RK |
 			     ATMEL_SSC_TD | ATMEL_SSC_RD));
-			     
-#else
-	at91_add_device_ssc(AT91SAM9G45_ID_SSC0,
-			    (ATMEL_SSC_TF | ATMEL_SSC_TX |
-			     ATMEL_SSC_TD | ATMEL_SSC_RD));
-#endif
 
 	/* adc */
 	at91_add_device_adc(&hammerhead_adc_data);

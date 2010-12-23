@@ -407,14 +407,6 @@ config MACH_HAMMERHEAD
 	help
 	  Select this if you are using Bluewater Systems Hammerhead
 
-config HAMMERHEAD_REV0
-        bool "Revision 0 Hammerhead board"
-        depends on MACH_HAMMERHEAD    
-        help
-          Select this only if you have a revision 0 Hammerhead board. Kernels
-          with this option set will only work correctly on Hammerhead revision
-          0 boards.
-
 endif
 
 # ----------------------------------------------------------
