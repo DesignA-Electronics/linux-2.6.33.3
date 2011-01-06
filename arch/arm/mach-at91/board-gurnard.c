@@ -367,7 +367,7 @@ static struct fb_monspecs at91fb_default_monspecs = {
 
 /* Driver datas */
 static struct atmel_lcdfb_info __initdata gurnard_lcdc_data = {
-	.lcdcon_is_backlight		= true,
+	/*.lcdcon_is_backlight		= true,*/
 	.default_bpp			= 16,
 	.default_dmacon			= ATMEL_LCDC_DMAEN,
 	.default_lcdcon2		= AT91SAM9G45_DEFAULT_LCDCON2,
@@ -380,6 +380,32 @@ static struct atmel_lcdfb_info __initdata gurnard_lcdc_data = {
 #endif
         .invert                         = 1,
 };
+
+/**
+ * Backlight
+ */
+static void gurnard_backlight_set_intensity(int intensity)
+{
+	at91_set_gpio_output(AT91_PIN_PE1, 1);
+	at91_set_gpio_value(AT91_PIN_PE1, intensity > 0);
+}
+
+static struct generic_bl_info gurnard_bl_info = {
+        .name                   = "gurnard-backlight",
+        .max_intensity          = 1,
+        .default_intensity      = 1,
+        .set_bl_intensity       = gurnard_backlight_set_intensity,
+};
+
+static struct platform_device gurnard_bl_device = {
+        .name                   = "generic-bl",
+        .id                     = 1,
+        .dev = {
+                .platform_data  = &gurnard_bl_info,
+        },
+};
+
+/* FPGA memory timings */
 
 
 static struct sam9_smc_config __initdata gurnard_fpga_smc_config = {
@@ -522,6 +548,8 @@ static void __init gurnard_board_init(void)
 	/* Backlight */
 	at91_set_gpio_output(AT91_PIN_PE1, 1);
 	at91_set_gpio_value(AT91_PIN_PE1, 1);
+	platform_device_register(&gurnard_bl_device);
+
 	/* Touch Screen & ADC */
 	at91_add_device_tsadcc(&gurnard_tsadcc_data);
 	/* USB HS Host */
