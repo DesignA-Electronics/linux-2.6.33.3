@@ -1,7 +1,7 @@
 #
 # Automatically generated make config: don't edit
 # Linux kernel version: 2.6.33.3
-# Wed Nov 17 18:10:51 2010
+# Thu Jan  6 13:59:41 2011
 #
 CONFIG_ARM=y
 CONFIG_SYS_SUPPORTS_APM_EMULATION=y
@@ -615,7 +615,7 @@ CONFIG_BLK_DEV_SD=y
 # CONFIG_SCSI_CONSTANTS is not set
 # CONFIG_SCSI_LOGGING is not set
 # CONFIG_SCSI_SCAN_ASYNC is not set
-CONFIG_SCSI_WAIT_SCAN=m
+# CONFIG_SCSI_WAIT_SCAN is not set
 
 #
 # SCSI Transports
@@ -984,7 +984,11 @@ CONFIG_FB_ATMEL=y
 # CONFIG_FB_MB862XX is not set
 # CONFIG_FB_BROADSHEET is not set
 # CONFIG_FB_SSD2119 is not set
-# CONFIG_BACKLIGHT_LCD_SUPPORT is not set
+CONFIG_BACKLIGHT_LCD_SUPPORT=y
+# CONFIG_LCD_CLASS_DEVICE is not set
+CONFIG_BACKLIGHT_CLASS_DEVICE=y
+CONFIG_BACKLIGHT_ATMEL_LCDC=y
+CONFIG_BACKLIGHT_GENERIC=y
 
 #
 # Display device support
@@ -1504,8 +1508,6 @@ CONFIG_ARM_UNWIND=y
 # CONFIG_DEBUG_ERRORS is not set
 # CONFIG_DEBUG_STACK_USAGE is not set
 # CONFIG_DEBUG_LL is not set
-# CONFIG_EARLY_PRINTK is not set
-# CONFIG_DEBUG_ICEDCC is not set
 # CONFIG_OC_ETM is not set
 
 #
