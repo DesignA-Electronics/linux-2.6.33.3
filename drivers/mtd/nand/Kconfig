@@ -320,7 +320,8 @@ config MTD_NAND_CS553X
 config MTD_NAND_ATMEL
 	tristate "Support for NAND Flash / SmartMedia on AT91 and AVR32"
 	depends on ARCH_AT91 || AVR32
-        select AT_HDMAC
+	select DMA_ENGINE if (ARCH_AT91SAM9RL || ARCH_AT91SAM9G45)
+        select AT_HDMAC if (ARCH_AT91SAM9RL || ARCH_AT91SAM9G45)	
 	help
 	  Enables support for NAND Flash / Smart Media Card interface
 	  on Atmel AT91 and AVR32 processors.
