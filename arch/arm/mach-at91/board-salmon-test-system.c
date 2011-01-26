@@ -25,18 +25,18 @@
 #define SSD2119_GPIO_BUS_ENABLE
 
 static struct at91_adc_data adc_data = {
-	.gpios[0] = -1,
-	.gpios[1] = -1,
+	.gpios[0] = AT91_PIN_PD20,
+	.gpios[1] = AT91_PIN_PD21,
 	.gpios[2] = AT91_PIN_PD22,
 	.gpios[3] = AT91_PIN_PD23,
-	.gpios[4] = -1,
-	.gpios[5] = -1,
-	.gpios[6] = -1,
-	.gpios[7] = -1,
+	.gpios[4] = AT91_PIN_PD24,
+	.gpios[5] = AT91_PIN_PD25,
+	.gpios[6] = AT91_PIN_PD26,
+	.gpios[7] = AT91_PIN_PD27,
 
-	.prescale = 4,
+	.prescale = 0xff,
 	.startup  = 12,
-	.sample   = 12,
+	.sample   = 0xf,
 };
 
 static struct ssd2119_platform_data ssd2119_data = {
