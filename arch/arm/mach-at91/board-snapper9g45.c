@@ -107,7 +107,7 @@ static struct mtd_partition __initdata sn9g45_nand_partition[] = {
 	{
 		.name	= "Kernel",
 		.offset	= MTDPART_OFS_NXTBLK,
-		.size	= SZ_4M,
+		.size	= SZ_32M,
 	},
 	{
 		.name	= "Filesystem",
