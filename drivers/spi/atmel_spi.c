@@ -460,8 +460,8 @@ atmel_spi_interrupt(int irq, void *dev_id)
 			udelay(xfer->delay_usecs);
 
 		msg->actual_length = xfer->len - spi_readl(as, TCR);
-		dev_warn(master->dev.parent, "overrun (%u/%u remaining)\n",
-			 spi_readl(as, TCR), spi_readl(as, RCR));
+		dev_dbg(master->dev.parent, "overrun (%u/%u remaining)\n",
+			spi_readl(as, TCR), spi_readl(as, RCR));
 
 		/*
 		 * Clean up DMA registers and make sure the data
