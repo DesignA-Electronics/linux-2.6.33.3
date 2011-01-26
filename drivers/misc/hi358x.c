@@ -357,16 +357,16 @@ static const struct attribute_group hi3585_sysfs_files = {
 static irqreturn_t hi358x_rx_int(int irq, void *dev_id)
 {
 	struct device *dev = dev_id;
-	dev_warn(dev, "%s: Interrupt %u RX handler called\n",
-		 __FUNCTION__, irq);
+	dev_dbg(dev, "%s: Interrupt %u RX handler called\n",
+		__FUNCTION__, irq);
 	return IRQ_HANDLED;
 }
 
 static irqreturn_t hi358x_tx_int(int irq, void *dev_id)
 {
 	struct device *dev = dev_id;
-	dev_warn(dev, "%s: Interrupt %u TX handler called\n", 
-		 __FUNCTION__, irq);
+	dev_dbg(dev, "%s: Interrupt %u TX handler called\n", 
+		__FUNCTION__, irq);
 	return IRQ_HANDLED;
 }
 
@@ -380,37 +380,46 @@ static int __devinit hi358x_probe(struct spi_device *spi)
 		dev_err(&spi->dev, "Missing platform data!\n");
 		return -EINVAL;
 	}
-	
+
 	/* Set up registers to sane base states */
  	buffer[0] = HI358X_ACLK_SET;
 	buffer[1] = 1;
 	status = spi_write(spi, buffer, 2);
-	if (status < 0)
+	if (status < 0) {
+		dev_err(&spi->dev, "Cannot set ACLK_SET: %d\n", status);
 		return status;
+	}
  
 	buffer[0] = HI358X_LABEL_SET_ALL;
 	status = spi_write(spi, buffer, 1);
-	if (status < 0)
+	if (status < 0) {
+		dev_err(&spi->dev, "Cannot set LABEL_SET_ALL: %d\n", status);
 		return status;
+	}
 	
 	buffer[0] = HI358X_WRITE_CONTROL;
 	buffer[1] = 0x20;	// Control 0x2020 - instant tx, external bus
 	buffer[2] = 0x20;
 	status = spi_write(spi, buffer, 3);
-	if (status < 0)
+	if (status < 0) {
+		dev_err(&spi->dev, "Cannot set WRITE_CONTROL: %d\n", status);
 		return status;
+	}
 	
 	buffer[0] = HI358X_MASTER_RESET;
 	status = spi_write(spi, buffer, 1);
-	if (status < 0)
-		return status;
+	if (status < 0) {
+		dev_err(&spi->dev, "Cannot set MASTER_RESET: %d\n", status);
+		return err;
+	}
 		
 	if (pd->tx_irq >= 0) {
 		err = request_irq(pd->tx_irq, hi358x_tx_int, 
 				  IRQ_TYPE_EDGE_BOTH, 
 				  "hi358x_tx_irq", &spi->dev);
 		if (err) {
-			/* FIXME */
+			dev_err(&spi->dev, "Cannot get tx irq %d: %d\n",
+				pd->tx_irq, err);
 			return err;
 		}
 	}
@@ -420,7 +429,8 @@ static int __devinit hi358x_probe(struct spi_device *spi)
 				  IRQ_TYPE_EDGE_BOTH, 
 				  "hi358x_rx_irq", &spi->dev);
 		if (err) {
-			/* FIXME */
+			dev_err(&spi->dev, "Cannot get rx irq %d: %d\n",
+				pd->rx_irq, err);
 			return err;
 		}
 	}
