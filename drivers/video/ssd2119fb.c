@@ -26,21 +26,21 @@
 /* Amount to DMA to frame buffer per SPI transfer */
 #define SSD2119FB_DMA_BLOCK_SIZE	1024
 
-#define SSD2119_OSC_START_REG         0x00
-#define SSD2119_OUTPUT_CTRL_REG       0x01
-#define SSD2119_LCD_DRIVE_AC_CTRL_REG 0x02
-#define SSD2119_DISPLAY_CTRL_REG      0x07
-#define SSD2119_PWR_CTRL_2_REG        0x0C
-#define SSD2119_PWR_CTRL_3_REG        0x0D
-#define SSD2119_PWR_CTRL_4_REG        0x0E
-#define SSD2119_SLEEP_MODE_REG        0x10
-#define SSD2119_ENTRY_MODE_REG        0x11
-#define SSD2119_RAM_DATA_REG          0x22
-#define SSD2119_V_RAM_POS_REG         0x44
-#define SSD2119_H_RAM_START_REG       0x45
-#define SSD2119_H_RAM_END_REG         0x46
-#define SSD2119_X_RAM_ADDR_REG        0x4E
-#define SSD2119_Y_RAM_ADDR_REG        0x4F
+#define REG_OSC_START		0x00
+#define REG_OUTPUT_CTRL		0x01
+#define REG_LCD_DRIVE_AC_CTRL	0x02
+#define REG_DISPLAY_CTRL	0x07
+#define REG_PWR_CTRL_2		0x0c
+#define REG_PWR_CTRL_3		0x0d
+#define REG_PWR_CTRL_4		0x0e
+#define REG_SLEEP_MODE		0x10
+#define REG_ENTRY_MODE		0x11
+#define REG_RAM_DATA		0x22
+#define REG_V_RAM_POS		0x44
+#define REG_H_RAM_START		0x45
+#define REG_H_RAM_END		0x46
+#define REG_X_RAM_ADDR		0x4e
+#define REG_Y_RAM_ADDR		0x4f
 
 /* FIXME - Remove these */
 #define LCD_WIDTH	320
@@ -76,7 +76,7 @@ static struct fb_var_screeninfo ssd2119fb_var = {
 	.nonstd		= 1,
 };
 
-static int ssd2119_write(struct ssd2119_fb_info *sinfo, u8 *buf, int len)
+static int ssd2119fb_write(struct ssd2119_fb_info *sinfo, u8 *buf, int len)
 {
         struct spi_transfer t = {
                 .tx_buf = buf,
@@ -90,13 +90,14 @@ static int ssd2119_write(struct ssd2119_fb_info *sinfo, u8 *buf, int len)
 }
 
 static int ssd2119fb_dma_write(struct ssd2119_fb_info *sinfo,
-			       u8 *buf, dma_addr_t dma_addr, int *len)
+			       u8 *buf, dma_addr_t dma_addr, int len,
+			       int *actual_len)
 {
 	int ret;
         struct spi_transfer t = {
 		.tx_buf = buf,
                 .tx_dma = dma_addr,
-                .len 	= *len,
+                .len 	= len,
         };
         struct spi_message m;
 
@@ -104,7 +105,7 @@ static int ssd2119fb_dma_write(struct ssd2119_fb_info *sinfo,
 	m.is_dma_mapped = 1;
         spi_message_add_tail(&t, &m);
         ret = spi_sync(sinfo->spi, &m);
-	*len = m.actual_length;
+	*actual_len = m.actual_length;
 	return ret;
 }
 
@@ -117,7 +118,7 @@ static int ssd2119_command(struct ssd2119_fb_info *sinfo, uint8_t reg)
         tx[1] = reg;
 
 	gpio_set_value(sinfo->pd->gpio_dc, 0);
-	status = ssd2119_write(sinfo, tx, 2);
+	status = ssd2119fb_write(sinfo, tx, 2);
         if (status < 0) {
                 dev_warn(&sinfo->spi->dev, "spi xfer failed with status %d\n",
                                 status);
@@ -135,7 +136,7 @@ static int ssd2119_data(struct ssd2119_fb_info *sinfo, uint16_t data)
         tx[1] = data;
 
 	gpio_set_value(sinfo->pd->gpio_dc, 1);
-        status = ssd2119_write(sinfo, tx, 2);
+        status = ssd2119fb_write(sinfo, tx, 2);
         if (status < 0) {
                 dev_warn(&sinfo->spi->dev, "spi xfer failed with status %d\n",
                                 status);
@@ -154,8 +155,8 @@ static int ssd2119_full_command(struct ssd2119_fb_info *sinfo, uint8_t reg,
         return ssd2119_data(sinfo, data);
 }
 
-static int ssd2119_fb_check_var(struct fb_var_screeninfo *var,
-			     struct fb_info *info)
+static int ssd2119fb_check_var(struct fb_var_screeninfo *var,
+			       struct fb_info *info)
 {
 	/* Force same alignment for each line */
 	var->xres = (var->xres + 3) & ~3UL;
@@ -208,8 +209,11 @@ static int ssd2119fb_update_region(struct ssd2119_fb_info *sinfo,
 				   int x, int y, int w, int h)
 {
         struct fb_info *info = sinfo->info;
-	int count, block, total, offset, bpp;
+	int count, block, written, total, offset, bpp;
 	
+	dev_dbg(&sinfo->spi->dev, "Updating region (%d, %d)-(%d, %d)\n",
+		x, y, x + w, x + h);
+
 	/*
 	 * Set the rectangle window
 	 *
@@ -219,15 +223,14 @@ static int ssd2119fb_update_region(struct ssd2119_fb_info *sinfo,
 	 * yet.
 	 *
 	 */
-	ssd2119_full_command(sinfo, SSD2119_H_RAM_START_REG, x);
-	ssd2119_full_command(sinfo, SSD2119_H_RAM_END_REG, x + w - 1);
-	ssd2119_full_command(sinfo, SSD2119_V_RAM_POS_REG, 
-			     ((y + h - 1) << 8) | y);
+	ssd2119_full_command(sinfo, REG_H_RAM_START, x);
+	ssd2119_full_command(sinfo, REG_H_RAM_END, x + w - 1);
+	ssd2119_full_command(sinfo, REG_V_RAM_POS, ((y + h - 1) << 8) | y);
 
 	/* Write to GRAM */
-	ssd2119_full_command(sinfo, SSD2119_X_RAM_ADDR_REG, 0);
-        ssd2119_full_command(sinfo, SSD2119_Y_RAM_ADDR_REG, 0);
-        ssd2119_command(sinfo, SSD2119_RAM_DATA_REG);
+	ssd2119_full_command(sinfo, REG_X_RAM_ADDR, 0);
+        ssd2119_full_command(sinfo, REG_Y_RAM_ADDR, 0);
+        ssd2119_command(sinfo, REG_RAM_DATA);
 	gpio_set_value(sinfo->pd->gpio_dc, 1);
 
 	bpp = info->var.bits_per_pixel / 8;
@@ -241,10 +244,11 @@ static int ssd2119fb_update_region(struct ssd2119_fb_info *sinfo,
 			block = w;
 
 		ssd2119fb_dma_write(sinfo, ((u8 *)info->screen_base) + offset,
-				    info->fix.smem_start + offset, &block);
+				    info->fix.smem_start + offset,
+				    block, &written);
 
-		count += block;
-		offset += block + ((info->var.xres - w) * bpp);
+		count  += written;
+		offset += written + ((info->var.xres - w) * bpp);
 	}
 
 	return 0;
@@ -259,7 +263,7 @@ static void ssd2119_fb_update_work(struct work_struct *work)
         ssd2119fb_update_region(sinfo, 0, 0, info->var.xres, info->var.yres);
 }
 
-static void ssd2119_fb_mod_timer(struct ssd2119_fb_info *sinfo)
+static void ssd2119fb_mod_timer(struct ssd2119_fb_info *sinfo)
 {
 	unsigned timeout;
 
@@ -281,7 +285,7 @@ static void ssd2119fb_timer_func(unsigned long arg)
         struct ssd2119_fb_info *sinfo = (struct ssd2119_fb_info *)arg;
 
         schedule_work(&sinfo->task);
-	ssd2119_fb_mod_timer(sinfo);
+	ssd2119fb_mod_timer(sinfo);
 }
 
 static void ssd2119fb_reset(struct ssd2119_fb_info *sinfo)
@@ -293,29 +297,33 @@ static void ssd2119fb_reset(struct ssd2119_fb_info *sinfo)
 	udelay(10);
 	gpio_set_value(sinfo->pd->gpio_reset, 1);
 
-        // Initialise screen
-        ssd2119_full_command(sinfo, SSD2119_SLEEP_MODE_REG, 0x0001);
-        ssd2119_full_command(sinfo, SSD2119_OSC_START_REG, 0x0001);
-        //ssd2119_full_command(sinfo, SSD2119_OUTPUT_CTRL_REG, 0x30ef);
-        ssd2119_full_command(sinfo, SSD2119_OUTPUT_CTRL_REG, 0x38ef);
-        //ssd2119_full_command(sinfo, SSD2119_OUTPUT_CTRL_REG, 0x78ef);
-        ssd2119_full_command(sinfo, SSD2119_LCD_DRIVE_AC_CTRL_REG, 0x0600);
-        ssd2119_full_command(sinfo, SSD2119_SLEEP_MODE_REG, 0x0000);
+	/* Enable sleep mode */
+        ssd2119_full_command(sinfo, REG_SLEEP_MODE, 0x0001);
+
+	/* Enable oscillator */
+        ssd2119_full_command(sinfo, REG_OSC_START, 0x0001);
+
+        ssd2119_full_command(sinfo, REG_OUTPUT_CTRL, 0x38ef);
+        //ssd2119_full_command(sinfo, REG_OUTPUT_CTRL, 0x78ef);
+        ssd2119_full_command(sinfo, REG_LCD_DRIVE_AC_CTRL, 0x0600);
+
+	/* Disable sleep mode */
+        ssd2119_full_command(sinfo, REG_SLEEP_MODE, 0x0000);
         mdelay(30);
-        ssd2119_full_command(sinfo, SSD2119_DISPLAY_CTRL_REG, 0x0033);
-        // ssd2119_full_command(sinfo, SSD2119_PWR_CTRL_2_REG, 0x0005);
-        // ssd2119_full_command(sinfo, SSD2119_PWR_CTRL_3_REG, 0x0007);
-        // ssd2119_full_command(sinfo, SSD2119_PWR_CTRL_4_REG, 0x3100);
-        ssd2119_full_command(sinfo, SSD2119_V_RAM_POS_REG, (LCD_HEIGHT - 1) << 8);
-        ssd2119_full_command(sinfo, SSD2119_H_RAM_START_REG, 0);
-        ssd2119_full_command(sinfo, SSD2119_H_RAM_END_REG, LCD_WIDTH - 1);
+        ssd2119_full_command(sinfo, REG_DISPLAY_CTRL, 0x0033);
+        // ssd2119_full_command(sinfo, REG_PWR_CTRL_2, 0x0005);
+        // ssd2119_full_command(sinfo, REG_PWR_CTRL_3, 0x0007);
+        // ssd2119_full_command(sinfo, REG_PWR_CTRL_4, 0x3100);
+        ssd2119_full_command(sinfo, REG_V_RAM_POS, (LCD_HEIGHT - 1) << 8);
+        ssd2119_full_command(sinfo, REG_H_RAM_START, 0);
+        ssd2119_full_command(sinfo, REG_H_RAM_END, LCD_WIDTH - 1);
 #if BPP == 24
-	ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x4230);
+	ssd2119_full_command(sinfo, REG_ENTRY_MODE, 0x4230);
 #else
-	ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6230);
+	ssd2119_full_command(sinfo, REG_ENTRY_MODE, 0x6230);
 #endif
-        // ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6830);
-        // ssd2119_full_command(sinfo, SSD2119_ENTRY_MODE_REG, 0x6230);
+        // ssd2119_full_command(sinfo, REG_ENTRY_MODE, 0x6830);
+        // ssd2119_full_command(sinfo, REG_ENTRY_MODE, 0x6230);
 }
 
 static ssize_t ssd2119_fb_refresh_hz_store(struct device *dev,
@@ -326,7 +334,7 @@ static ssize_t ssd2119_fb_refresh_hz_store(struct device *dev,
         struct ssd2119_fb_info *sinfo = info->par;
 
 	sinfo->pd->refresh_speed = simple_strtoul(buf, NULL, 0);
-	ssd2119_fb_mod_timer(sinfo);
+	ssd2119fb_mod_timer(sinfo);
 	
 	return count;
 }
@@ -358,22 +366,8 @@ static ssize_t ssd2119_fb_update_sysfs(struct device *dev,
 {
         struct fb_info *info = dev_get_drvdata(dev);
         struct ssd2119_fb_info *sinfo = info->par;
-#ifdef SSD2119FB_DEBUG
-        struct timespec start_time;
-        struct timespec finish_time;
-        unsigned long diff;
 
-        start_time = current_kernel_time();
-#endif
         ssd2119fb_update_region(sinfo, 0, 0, info->var.xres, info->var.yres);
-
-#ifdef SSD2119FB_DEBUG
-        finish_time = current_kernel_time();
-        diff = ((1000000000*finish_time.tv_sec)+finish_time.tv_nsec) - 
-                ((1000000000*start_time.tv_sec)+start_time.tv_nsec);
-        printk("Fill took %luns\n", diff);
-#endif
-
         return count;
 }
 
@@ -395,7 +389,7 @@ static const struct attribute_group sysfs_files = {
 
 static struct fb_ops ssd2119_fb_ops = {
 	.owner		= THIS_MODULE,
-	.fb_check_var	= ssd2119_fb_check_var,
+	.fb_check_var	= ssd2119fb_check_var,
 	.fb_fillrect	= cfb_fillrect,
 	.fb_copyarea	= cfb_copyarea,
 	.fb_imageblit	= cfb_imageblit,
@@ -444,7 +438,7 @@ static int ssd2119_fb_probe(struct spi_device *spi)
 	}
 	info->fix.smem_start = (unsigned long)dma_addr;
 
-	ret = ssd2119_fb_check_var(&info->var, info);
+	ret = ssd2119fb_check_var(&info->var, info);
 
 	dev_set_drvdata(dev, info);
 
@@ -468,7 +462,7 @@ static int ssd2119_fb_probe(struct spi_device *spi)
         /* Initialise the auto-refresh timer and kick it off if necessary */
 	setup_timer(&sinfo->auto_update_timer, ssd2119fb_timer_func,
 		    (unsigned long)sinfo);
-	ssd2119_fb_mod_timer(sinfo);
+	ssd2119fb_mod_timer(sinfo);
 
 	if (sinfo->pd->refresh_speed)
 		dev_info(dev, "Initialised - Auto refreshing at %d hz\n",
@@ -507,12 +501,12 @@ static int ssd2119_fb_remove(struct spi_device *spi)
 
 static struct spi_driver ssd2119fb_driver = {
     	.driver = {
-        	.name   = "ssd2119fb",
-                .bus = &spi_bus_type,
-                .owner  = THIS_MODULE,
+        	.name	= "ssd2119fb",
+                .bus	= &spi_bus_type,
+                .owner	= THIS_MODULE,
         },
-        .probe  = ssd2119_fb_probe,
-        .remove = ssd2119_fb_remove,
+        .probe	= ssd2119_fb_probe,
+        .remove	= ssd2119_fb_remove,
 };
 
 static int __init ssd2119fb_init(void)
