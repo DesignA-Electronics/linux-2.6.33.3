@@ -29,6 +29,7 @@
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/nand.h>
 #include <linux/mtd/partitions.h>
+#include <linux/dmaengine.h>
 
 #include <linux/gpio.h>
 #include <linux/io.h>
