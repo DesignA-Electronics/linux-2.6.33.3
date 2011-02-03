@@ -256,6 +256,13 @@ config MACH_SNAPPER9G20
 	help
 	  Select this if you are using Bluewater Systems Snapper 9G20/9260
 
+config MACH_DIGISNAP
+        bool "Harbortronics Digisnap board"
+        depends on MACH_SNAPPER9G20
+        help
+          Select this if you are using the Harbortronics Snapper 9260 based
+          Digisnap board
+
 endif
 
 # ----------------------------------------------------------

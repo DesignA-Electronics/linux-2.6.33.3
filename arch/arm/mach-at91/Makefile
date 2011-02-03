@@ -80,6 +80,7 @@ obj-$(CONFIG_MACH_HAMMERHEAD) += board-hammerhead.o
 
 # Snapper9G20 board-specific support
 obj-$(CONFIG_MACH_SNAPPER9G20) += board-snapper9g20.o
+obj-$(CONFIG_MACH_DIGISNAP)    += board-digisnap.o 
 
 # AT91CAP9 board-specific support
 obj-$(CONFIG_MACH_AT91CAP9ADK)	+= board-cap9adk.o
