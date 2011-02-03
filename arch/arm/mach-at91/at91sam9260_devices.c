@@ -625,6 +625,43 @@ void __init at91_add_device_spi(struct spi_board_info *devices, int nr_devices)
 void __init at91_add_device_spi(struct spi_board_info *devices, int nr_devices) {}
 #endif
 
+/* --------------------------------------------------------------------
+ *  ADC
+ * -------------------------------------------------------------------- */
+#if defined(CONFIG_AT91_ADC) || defined(CONFIG_AT91_ADC_MODULE)
+static struct at91_adc_data adc_data;
+
+static struct resource adc_resources[] = {
+	[0] = {
+                .start  = AT91SAM9260_BASE_ADC,
+                .end    = AT91SAM9260_BASE_ADC + 0x100,
+                .flags  = IORESOURCE_MEM,
+        },
+        [1] = {
+                .start  = AT91SAM9260_ID_ADC,
+                .end    = AT91SAM9260_ID_ADC,
+                .flags  = IORESOURCE_IRQ,
+        },
+};
+
+static struct  platform_device at91sam9260_adc_device = {
+        .name           = "at91_adc",
+        .id             = -1,
+        .resource       = adc_resources,
+        .num_resources  = ARRAY_SIZE(adc_resources),
+	.dev        	= {
+                .platform_data  = &adc_data,
+	},
+};
+
+void __init at91_add_device_adc(struct at91_adc_data *data)
+{
+        adc_data = *data;
+        platform_device_register(&at91sam9260_adc_device);
+}
+#else
+void __init at91_add_device_adc(struct at91_adc_data *data) {}
+#endif
 
 /* --------------------------------------------------------------------
  *  Timer/Counter blocks
