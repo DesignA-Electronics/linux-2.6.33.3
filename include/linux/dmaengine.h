@@ -588,6 +588,7 @@ enum dma_status dma_sync_wait(struct dma_chan *chan, dma_cookie_t cookie);
 #ifdef CONFIG_DMA_ENGINE
 enum dma_status dma_wait_for_async_tx(struct dma_async_tx_descriptor *tx);
 void dma_issue_pending_all(void);
+void dma_release_channel(struct dma_chan *chan);
 #else
 static inline enum dma_status dma_wait_for_async_tx(struct dma_async_tx_descriptor *tx)
 {
@@ -597,7 +598,18 @@ static inline void dma_issue_pending_all(void)
 {
 	do { } while (0);
 }
+static inline struct dma_chan *__dma_request_channel(dma_cap_mask_t *mask,
+						     dma_filter_fn fn,
+						     void *fn_param)
+{
+	return NULL;
+}
+static inline void dma_release_channel(struct dma_chan *chan)
+{
+}
 #endif
+#define dma_request_channel(mask, x, y) __dma_request_channel(&(mask), x, y)
+struct dma_chan *__dma_request_channel(dma_cap_mask_t *mask, dma_filter_fn fn, void *fn_param);
 
 /* --- DMA device --- */
 
@@ -605,9 +617,6 @@ int dma_async_device_register(struct dma_device *device);
 void dma_async_device_unregister(struct dma_device *device);
 void dma_run_dependencies(struct dma_async_tx_descriptor *tx);
 struct dma_chan *dma_find_channel(enum dma_transaction_type tx_type);
-#define dma_request_channel(mask, x, y) __dma_request_channel(&(mask), x, y)
-struct dma_chan *__dma_request_channel(dma_cap_mask_t *mask, dma_filter_fn fn, void *fn_param);
-void dma_release_channel(struct dma_chan *chan);
 
 /* --- Helper iov-locking functions --- */
 
