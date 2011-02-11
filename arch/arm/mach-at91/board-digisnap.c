@@ -41,36 +41,44 @@ static struct gpio_keys_button digisnap_buttons[] = {
 	{
 		.gpio		= AT91_PIN_PB8,
 		.code		= KEY_UP,
-		.desc		= "SW1_UP",
+		.desc		= "Sup",
 		.active_low	= 0,
 		.wakeup		= 0,
 	},
 	{
 		.gpio		= AT91_PIN_PB9,
 		.code		= KEY_DOWN,
-		.desc		= "SW1_DOWN",
+		.desc		= "Sdown",
 		.active_low	= 0,
 		.wakeup		= 0,
 	},
 	{
 		.gpio		= AT91_PIN_PB6,
 		.code		= KEY_LEFT,
-		.desc		= "SW1_LEFT",
+		.desc		= "Sleft",
 		.active_low	= 0,
 		.wakeup		= 0,
 	},
 	{
 		.gpio		= AT91_PIN_PB7,
 		.code		= KEY_RIGHT,
-		.desc		= "SW1_RIGHT",
-		.active_low	= 0,
+		.desc		= "Sright",
+		.active_low	= 1,
 		.wakeup		= 0,
 	},
 	{
-		.gpio		= AT91_PIN_PA31,
+		.gpio		= AT91_PIN_PB5,
 		.code		= KEY_ENTER,
-		.desc		= "SW1_BUTTON",
-		.active_low	= 0,
+		.desc		= "Scenter",
+		.active_low	= 1,
+		.wakeup		= 1,
+	},
+	{
+		/* Not really a button, but we want it as a wakeup source */
+		.gpio		= AT91_PIN_PB18,
+		.code		= KEY_1,
+		.desc		= "TrigIn",
+		.active_low	= 1,
 		.wakeup		= 1,
 	},
 };
@@ -100,10 +108,15 @@ static struct at91_adc_data digisnap_adc_data = {
 
 static int __init digisnap_init(void)
 {
+	int i;
+
 	at91_add_device_spi(digisnap_spi_board_info,
 			    ARRAY_SIZE(digisnap_spi_board_info));
-	platform_device_register(&digisnap_button_device);
 	at91_add_device_adc(&digisnap_adc_data);
+
+	for (i = 0; i < ARRAY_SIZE(digisnap_buttons); i++)
+		at91_set_gpio_input(digisnap_buttons[i].gpio, 0);
+	platform_device_register(&digisnap_button_device);
 	return 0;
 }
 arch_initcall(digisnap_init);
