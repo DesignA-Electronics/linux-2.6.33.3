@@ -274,7 +274,7 @@ static inline void offset_to_page(uint64_t from, uint8_t *addr)
  */
 static inline void addr_to_oob(uint8_t *addr)
 {
-        /* FIXME: should this be 
+        /* FIXME: should this be
          * addr[1] = (pagesize / 4) >> 8;
          */
         addr[1] = 0x10;
@@ -462,8 +462,8 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
          * one of them at least is guaranteed to not be */
         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
                 int ret;
-                printk("Checking block %d, %d, %d\n", i, i * ECC_CALC_SIZE,
-                                i * ECC_CHUNK_SIZE);
+                //printk("Checking block %d, %d, %d\n", i, i * ECC_CALC_SIZE,
+                                //i * ECC_CHUNK_SIZE);
                 if (memcmp(&fpga_ecc[i * ECC_CALC_SIZE],
                            &nand_ecc[i * ECC_CALC_SIZE], ECC_CALC_SIZE) == 0)
                         continue;
