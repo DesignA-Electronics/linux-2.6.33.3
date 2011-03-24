@@ -105,9 +105,8 @@ static void __init hammerhead_init_irq(void)
  */
 static struct at91_usbh_data __initdata hammerhead_usbh_hs_data = {
 	.ports		= 2,
-
-	/* FIXME - These are not correct, they are both audio pins */
-	//.vbus_pin	= {AT91_PIN_PD1, AT91_PIN_PD3},
+	.vbus_pin 	= {AT91_PIN_PD20},
+	.oc_irq		= {gpio_to_irq(AT91_PIN_PD19)},
 };
 
 

@@ -14,6 +14,7 @@
 
 #include <linux/clk.h>
 #include <linux/platform_device.h>
+#include <linux/timer.h>
 
 #include <mach/hardware.h>
 #include <asm/gpio.h>
@@ -25,9 +26,16 @@
 #error "CONFIG_ARCH_AT91 must be defined."
 #endif
 
+struct at91_ohci_port_info {
+	/* FIXME - vbus exists twice */
+	int vbus_pin;
+	struct timer_list oc_timer;
+};
+
 /* interface and function clocks; sometimes also an AHB clock */
 static struct clk *iclk, *fclk, *hclk;
 static int clocked;
+static struct at91_ohci_port_info port_info[2];
 
 extern int usb_disabled(void);
 
@@ -203,6 +211,34 @@ static void usb_hcd_at91_remove(struct usb_hcd *hcd,
 
 /*-------------------------------------------------------------------------*/
 
+static void ohci_at91_oc_timer(unsigned long data)
+{
+	struct at91_ohci_port_info *port = (struct at91_ohci_port_info *)data;
+	
+	pr_debug("ohci_at91: Re-enabling port after over-current\n");
+
+	/* Enable power to the port */
+	if (port->vbus_pin > 0)
+		gpio_set_value(port->vbus_pin, 1);	
+} 
+
+static irqreturn_t ohci_at91_oc_irq(int irq, void *data)
+{
+	struct at91_ohci_port_info *port = data;
+
+	pr_debug("ohci_at91: over-current detected\n");
+
+	/* Disable power to the port */
+	if (port->vbus_pin > 0)
+		gpio_set_value(port->vbus_pin, 0);
+
+	/* Kick-off timer to re-enable port in a second */
+	if (!timer_pending(&port->oc_timer))
+		mod_timer(&port->oc_timer, jiffies + msecs_to_jiffies(1000));
+
+	return IRQ_HANDLED;
+};
+
 static int __devinit
 ohci_at91_start (struct usb_hcd *hcd)
 {
@@ -222,6 +258,7 @@ ohci_at91_start (struct usb_hcd *hcd)
 	}
 	return 0;
 }
+
 
 /*-------------------------------------------------------------------------*/
 
@@ -272,7 +309,7 @@ static const struct hc_driver ohci_at91_hc_driver = {
 static int ohci_hcd_at91_drv_probe(struct platform_device *pdev)
 {
 	struct at91_usbh_data	*pdata = pdev->dev.platform_data;
-	int			i;
+	int			i, ret;
 
 	if (pdata) {
 		/* REVISIT make the driver support per-port power switching,
@@ -285,6 +322,26 @@ static int ohci_hcd_at91_drv_probe(struct platform_device *pdev)
 				continue;
 			gpio_request(pdata->vbus_pin[i], "ohci_vbus");
 			gpio_direction_output(pdata->vbus_pin[i], 0);
+			port_info[i].vbus_pin = pdata->vbus_pin[i];
+		}
+
+		for (i = 0; i < ARRAY_SIZE(pdata->oc_irq); i++) {
+			if (pdata->oc_irq[i] <= 0)
+				continue;
+		
+			setup_timer(&port_info[i].oc_timer,
+				    ohci_at91_oc_timer,
+				    (unsigned long)&port_info[i]);
+			
+			ret = request_irq(pdata->oc_irq[i],
+					  ohci_at91_oc_irq, 
+					  IRQF_TRIGGER_RISING |
+					  IRQF_TRIGGER_FALLING,
+					  "ohci_oc_irq", &port_info[i]);
+			if (ret) {
+				// FIXME
+				pdata->oc_irq[i] = -1;
+			}
 		}
 	}
 
@@ -303,6 +360,13 @@ static int ohci_hcd_at91_drv_remove(struct platform_device *pdev)
 				continue;
 			gpio_direction_output(pdata->vbus_pin[i], 1);
 			gpio_free(pdata->vbus_pin[i]);
+		}
+
+		for (i = 0; i < ARRAY_SIZE(pdata->oc_irq); i++) {
+			if (pdata->oc_irq[i] <= 0)
+				continue;
+			free_irq(pdata->oc_irq[i], &port_info[i]);
+			del_timer_sync(&port_info[i].oc_timer);
 		}
 	}
 
