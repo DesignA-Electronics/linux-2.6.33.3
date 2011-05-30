@@ -115,7 +115,7 @@ static int __init digisnap_init(void)
 	at91_add_device_adc(&digisnap_adc_data);
 
 	for (i = 0; i < ARRAY_SIZE(digisnap_buttons); i++)
-		at91_set_gpio_input(digisnap_buttons[i].gpio, 0);
+		at91_set_gpio_input(digisnap_buttons[i].gpio, 1);
 	platform_device_register(&digisnap_button_device);
 	return 0;
 }
