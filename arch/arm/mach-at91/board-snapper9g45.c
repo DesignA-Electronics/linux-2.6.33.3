@@ -82,7 +82,7 @@ static struct usba_platform_data __initdata sn9g45_usba_udc_data = {
  */
 static struct at91_eth_data __initdata sn9g45_macb_data = {
 	.is_rmii	= 1,
-        .phy_mask       = ~(1 << 27), // Phy 0x1b
+        .phy_mask       = 0x00, //* Phy 0x1b or 0x1f */
 };
 
 /*
