@@ -11,6 +11,7 @@ obj-$(CONFIG_AT91_BOOTCOUNT)    += at91_bootcount.o
 obj-$(CONFIG_ATMEL_SSC)		+= atmel-ssc.o
 obj-$(CONFIG_ATMEL_TCLIB)	+= atmel_tclib.o
 obj-$(CONFIG_AT91_ADC)		+= at91_adc.o
+obj-$(CONFIG_EXTERNAL_SHUTDOWN)	+= ext_shutdown.o
 obj-$(CONFIG_ICS932S401)	+= ics932s401.o
 obj-$(CONFIG_LKDTM)		+= lkdtm.o
 obj-$(CONFIG_TIFM_CORE)       	+= tifm_core.o

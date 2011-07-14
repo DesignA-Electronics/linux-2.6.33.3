@@ -89,6 +89,13 @@ config AT91_ADC
         help
           Select this to enable the ADC on the AT91 family of cpus
 
+config EXTERNAL_SHUTDOWN
+        tristate "Shutdown and external device"
+        depends on ARCH_AT91
+        help
+          Select this to enable shutting down an external device based
+          on receiving an interrupt on a GPIO
+
 config IBM_ASM
 	tristate "Device driver for IBM RSA service processor"
 	depends on X86 && PCI && INPUT && EXPERIMENTAL
