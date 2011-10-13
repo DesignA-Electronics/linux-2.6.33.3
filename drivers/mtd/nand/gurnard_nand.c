@@ -612,7 +612,8 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
         }
 
         if (max_len < 0)
-                max_len = mtd->oobsize + mtd->writesize;
+		max_len = buf ? mtd->writesize : 0 +
+			  oob ? mtd->oobsize : 0;
 
         /* If this is the raid device, then we actually just read
          * from the first device
