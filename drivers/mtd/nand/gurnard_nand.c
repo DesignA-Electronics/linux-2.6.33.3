@@ -85,6 +85,9 @@ enum {
         REG_CFG_SET     = 0x000,
         REG_CFG_CLR     = 0x004,
         REG_BYPASS      = 0x008,
+	REG_RD_TIMER	= 0x010,
+	REG_WR_TIMER	= 0x014,
+        REG_VERIFY_FAIL = 0x01c,
         REG_BUFF_LEN    = 0x200,
         REG_ECC         = 0x400,
 
@@ -97,6 +100,24 @@ enum {
         BIT_RNB         = 1 << 17,
         BIT_BUSY        = 1 << 18,
         BIT_VERIFY_OK   = 1 << 19,
+};
+
+struct mode_timing_info {
+	uint32_t wr_timer;
+	uint32_t rd_timer;
+};
+
+/* See Section 7.6.1 of the Gurnard specification
+ * These are essneitally bitmasks for a 7.5ns clock, telling the FPGA
+ * how to clock in/out data from the NAND devices
+ */
+struct mode_timing_info mode_timing[] = {
+	[0] = {0x200003fc, 0x20000fe0},
+	[1] = {0x0040001e, 0x0040000f},
+	[2] = {0x00100007, 0x00400007},
+	[3] = {0x00080006, 0x00200003},
+	[4] = {0x00080006, 0x00200003},
+	[5] = {0x00040002, 0x00200003},
 };
 
 #if 1
@@ -1123,6 +1144,119 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
         return ret;
 }
 
+static int gurnard_get_timing_mode(struct gurnard_nand_host *host)
+{
+	uint8_t features[4];
+	int ret;
+	int mode;
+
+	ret = gurnard_get_features(host, 1, NAND_TIMING_FEATURE, features);
+	if (ret < 0)
+		return ret;
+
+	mode = (int)features[0];
+
+	ret = gurnard_get_features(host, 2, NAND_TIMING_FEATURE, features);
+	if (ret < 0)
+		return ret;
+
+	if (features[0] != mode) {
+		dev_err(&host->pdev->dev,
+			"Mode timing differs between stacks: 0x%x vs 0x%x\n",
+			mode, features[0]);
+		return -EINVAL;
+	}
+
+	return mode;
+}
+
+static int gurnard_set_timing_mode(struct gurnard_nand_host *host, int mode)
+{
+	uint32_t features[4];
+	int new_mode;
+	int ret;
+
+	if (mode < 0 || mode > ARRAY_SIZE(mode_timing)) {
+		dev_warn(&host->pdev->dev,
+			 "Available timing mode %d is not supported, "
+			 "defaulting to mode 0\n",
+			 mode);
+		mode = 0;
+	}
+
+	/* Update the NAND devices with the best speed */
+	features[0] = mode       | mode << 8 |
+		      mode << 16 | mode << 24;
+	features[1] = 0;
+	features[2] = 0;
+	features[3] = 0;
+
+	/* Set it on both */
+	ret = gurnard_set_features(host, 3, NAND_TIMING_FEATURE, features);
+	if (ret < 0)
+		return ret;
+
+	new_mode = gurnard_get_timing_mode(host);
+	if (new_mode != mode) {
+		dev_err(&host->pdev->dev,
+			"Set mode to 0x%x, but it didn't apply: 0x%x\n",
+			mode, new_mode);
+		return -EINVAL;
+	}
+
+	/* Update the FPGA speed */
+	reg_writel(mode_timing[mode].wr_timer, WR_TIMER);
+	reg_writel(mode_timing[mode].rd_timer, RD_TIMER);
+
+	return 0;
+}
+
+
+/**
+ * Use the ONFI timing information to determine the optimal speed
+ * that we can run these NAND flash devices at. Reconfigure both
+ * the NAND flash devices, and the FPGA timings to these speeds
+ */
+static int gurnard_autoconfigure_timings(struct gurnard_nand_host *host)
+{
+	int ret;
+	int best_mode;
+
+#ifdef FORCE_SLOW_NAND
+	best_mode = 0;
+#else
+	char buf[256];
+	uint16_t timing_mode;
+
+	/* FIXME: Should be reading timings from both stack 1 & 2 */
+
+	ret = gurnard_read_onfi(host, 1, buf);
+	if (ret < 0)
+		return ret;
+
+	timing_mode = buf[130] << 8 | buf[129];
+	if ((timing_mode & 0x3f) == 0) {
+		dev_warn(&host->pdev->dev,
+			 "ONFI data doesn't seem to contain valid timing mode: 0x%x\n",
+			 timing_mode);
+		return -EINVAL;
+	}
+	/* Get the index of the highest bit that was set */
+	best_mode = ffs(~timing_mode);
+
+	/* ffs is 1 based, we want it 0 based, and the invert
+	 * will have moved the bit on by one. */
+	if (best_mode > 1)
+		best_mode-=2;
+#endif
+
+	ret = gurnard_set_timing_mode(host, best_mode);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
 static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                            const char *buf, size_t count)
 {
@@ -1274,6 +1408,7 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 if (mtd->priv)
                         dev_err(dev, "RAID Stack already probed\n");
                 else {
+			int e;
                         memset(stack, 0, sizeof(*stack));
 
                         stack->host = host;
@@ -1281,6 +1416,17 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
 
                         gurnard_reset(host, stack->device_addr);
 
+			/* Force the device into mode 0, just so
+			 * we make sure the onfi read happens ok
+			 */
+			gurnard_set_timing_mode(host, 0);
+#if 0
+			e = gurnard_autoconfigure_timings(host);
+			if (e < 0) {
+				dev_err(dev, "Unable to configure NAND timings\n");
+				return e;
+			}
+#endif
                         /* Just take the settings from stack 0,
                          * since they're all identical */
                         stack->width = host->stack[0].width;
@@ -1384,12 +1530,42 @@ static ssize_t reset(struct device *dev, struct device_attribute *attr,
         return count;
 }
 
+static ssize_t write_timing_mode(struct device *dev, struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+        struct platform_device *pdev = to_platform_device(dev);
+        struct gurnard_nand_host *host = platform_get_drvdata(pdev);
+	int mode = simple_strtol(buf, NULL, 0);
+	int ret;
+
+	ret = gurnard_set_timing_mode(host, mode);
+	if (ret < 0)
+		return ret;
+
+	return count;
+}
+
+static ssize_t read_timing_mode(struct device *dev, struct device_attribute *attr,
+                char *buf)
+{
+        struct platform_device *pdev = to_platform_device(dev);
+        struct gurnard_nand_host *host = platform_get_drvdata(pdev);
+	int mode;
+
+	mode = gurnard_get_timing_mode(host);
+	if (mode < 0)
+		return mode;
+	return sprintf(buf, "%d\n", mode);
+}
+
 static DEVICE_ATTR(probe, S_IWUSR, NULL, force_probe);
 static DEVICE_ATTR(id0, S_IRUGO, read_id_0, NULL);
 static DEVICE_ATTR(id1, S_IRUGO, read_id_1, NULL);
 static DEVICE_ATTR(onfi0, S_IRUGO, read_onfi_0, NULL);
 static DEVICE_ATTR(onfi1, S_IRUGO, read_onfi_1, NULL);
 static DEVICE_ATTR(reset, S_IWUSR, NULL, reset);
+static DEVICE_ATTR(timing_mode, S_IWUSR | S_IRUGO, read_timing_mode,
+						   write_timing_mode);
 
 static struct attribute *gurnard_attributes[] = {
         &dev_attr_probe.attr,
@@ -1398,6 +1574,7 @@ static struct attribute *gurnard_attributes[] = {
         &dev_attr_id1.attr,
         &dev_attr_onfi0.attr,
         &dev_attr_onfi1.attr,
+	&dev_attr_timing_mode.attr,
         NULL,
 };
 
