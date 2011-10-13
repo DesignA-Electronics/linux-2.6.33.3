@@ -43,10 +43,14 @@
 // #define RAW_ACCESS_DEBUG
 
 /* Check that the Linux ECC calculations match the FPGA ones */
-#define VERIFY_FPGA_ECC_CALC
+// #define VERIFY_FPGA_ECC_CALC
 
 /* Actually use the FPGA ECC results */
 #define USE_FPGA_ECC
+
+/* If set, then force the NAND devices into mode 0, rather than
+ * auto-probing the chips */
+// #define FORCE_SLOW_NAND
 
 /* The first 4-bytes (32-bit word) of the ecc is the bad-block marker
  * for each of the 4 8-bit devices. We then have 192 bytes of ECC,
