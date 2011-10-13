@@ -356,6 +356,58 @@ static int gurnard_read_onfi(struct gurnard_nand_host *host, uint32_t device_add
         return 256;
 }
 
+static int gurnard_get_features(struct gurnard_nand_host *host,
+		uint32_t device_addr, uint8_t feature_addr,
+		uint8_t *featuresp)
+{
+	uint32_t features[4];
+	int i;
+
+        if (device_addr != 1 && device_addr != 2) {
+                dev_err(&host->pdev->dev,
+                        "Cannot read ID from anything other than device 1 or 2\n");
+                return -ENODEV;
+        }
+        gurnard_select_chips(host, device_addr);
+        gurnard_write_command(host, NAND_CMD_GET_FEATURES);
+        gurnard_write_address(host, &feature_addr, 1);
+        /* FIXME: What is the correct delay system here? tWB */
+        udelay(1);
+        gurnard_rnb_wait(host);
+	gurnard_read_buf(host, features, 4 * ARRAY_SIZE(features));
+        gurnard_select_chips(host, 0);
+
+        if (!n_way_match(features[0], 4) || !n_way_match(features[1], 4) ||
+            !n_way_match(features[2], 4) || !n_way_match(features[3], 4)) {
+                dev_err(&host->pdev->dev,
+                                "Features do not match between chips: "
+                                "0x%x 0x%x 0x%x 0x%x\n",
+                                features[0], features[1],
+				features[2], features[3]);
+                return -EINVAL;
+        }
+
+	for (i = 0; i < ARRAY_SIZE(features); i++)
+		featuresp[i] = features[i] & 0xff;
+
+	return ARRAY_SIZE(features);
+}
+
+static int gurnard_set_features(struct gurnard_nand_host *host,
+		uint32_t device_addr, uint8_t feature_addr,
+		uint32_t *features)
+{
+        gurnard_select_chips(host, device_addr);
+        gurnard_write_command(host, NAND_CMD_SET_FEATURES);
+        gurnard_write_address(host, &feature_addr, 1);
+        /* FIXME: What is the correct delay system here? tADL */
+        udelay(1);
+	gurnard_write_buf(host, features, 16);
+        gurnard_select_chips(host, 0);
+
+	return 0;
+}
+
 static int gurnard_read_id(struct gurnard_nand_host *host, uint32_t device_addr,
                 uint8_t *mfr, uint8_t *device, uint8_t *cellinfo, uint32_t *writesize,
                 uint32_t *oobsize, uint32_t *erasesize, uint8_t *busw,
