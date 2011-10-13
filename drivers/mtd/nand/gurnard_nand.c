@@ -17,6 +17,7 @@
 
 #include <linux/slab.h>
 #include <linux/module.h>
+#include <linux/vmalloc.h>
 #include <linux/moduleparam.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
@@ -312,13 +313,20 @@ static int gurnard_read_onfi(struct gurnard_nand_host *host, uint32_t device_add
 {
         uint8_t addr = 0;
         int i;
-        uint32_t id[256];
+        uint32_t *id;
 
         if (device_addr != 1 && device_addr != 2) {
                 dev_err(&host->pdev->dev,
                         "Cannot read ID from anything other than device 1 or 2\n");
                 return -ENODEV;
         }
+	id = vmalloc(256 * 4);
+	if (!id) {
+		dev_err(&host->pdev->dev,
+			"Cannot allocate %d bytes for onfi data\n",
+			256 * 4);
+		return -ENOMEM;
+	}
         gurnard_select_chips(host, device_addr);
         gurnard_write_command(host, NAND_CMD_READPARAM);
         gurnard_write_address(host, &addr, 1);
@@ -327,12 +335,23 @@ static int gurnard_read_onfi(struct gurnard_nand_host *host, uint32_t device_add
         gurnard_read_buf(host, id, 256 * 4);
         gurnard_select_chips(host, 0);
 
+	if ((id[0] & 0xff) != 'O' ||
+	    (id[1] & 0xff) != 'N' ||
+	    (id[2] & 0xff) != 'F' ||
+	    (id[3] & 0xff) != 'I') {
+		dev_err(&host->pdev->dev, "Invalid ONFI prefix: %x %x %x %x\n",
+				id[0], id[1], id[2], id[3]);
+		vfree(id);
+		return -ENODEV;
+	}
+
         for (i = 0; i < 256; i++) {
                 if (!n_way_match(id[i], 4))
                         dev_err(&host->pdev->dev, "Parameters mismatch at %d: 0x%8.8x",
                                         i, id[i]);
                 *buf++ = id[i] & 0xff;
         }
+	vfree(id);
 
         return 256;
 }
