@@ -512,11 +512,11 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
         struct gurnard_nand_host *host = stack->host;
         uint8_t *nand_ecc = &oob[mtd->ecclayout->eccpos[0]];
         int i;
+#if !defined(USE_FPGA_ECC) || defined(VERIY_FPGA_ECC_CALC)
+        uint8_t calc_ecc[ECC_CALC_SIZE];
+#endif
 
 #ifndef USE_FPGA_ECC
-        /* FIXME: We seem to have an odd ECC issue in the FPGA,
-         * but it is intermittent, so we're simply replacing
-         * its values with the CPU calculated ones for now */
 #warning "Overwriting the FPGA ECC with the one from the CPU"
         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
                 __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], ECC_CHUNK_SIZE,
@@ -525,7 +525,7 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
         }
 #endif
 #ifdef VERIFY_FPGA_ECC_CALC
-        uint8_t calc_ecc[ECC_CALC_SIZE];
+#warning "Software ECC calculations being done"
         //nand_ecc[0] ^= 0x1; // put a single bit error into the ecc we get back from the device
         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++) {
                 __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE], ECC_CHUNK_SIZE,
