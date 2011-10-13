@@ -130,7 +130,8 @@ struct gurnard_nand_host {
 /**
  * Low level NAND access functions
  */
-static inline void gurnard_select_chips(struct gurnard_nand_host *host, unsigned int chip_mask)
+static inline void gurnard_select_chips(struct gurnard_nand_host *host,
+		unsigned int chip_mask)
 {
         /* FIXME: Should we be aquiring a lock if chip_mask is non-zero, and
          * clearing the lock if it is zero, or does the MTD layer cover us
@@ -138,7 +139,7 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host, unsigned
          */
         /* FIXME: Should be taking the page address as an argument, and
          * selecting the appropriate level in the stack via the STACK ADDR
-         * bits in the FPGA CFG_SET/CFG_CLEAR registers
+         * bits in the FPGA CFG_SET/CFG_CLR registers
          */
        reg_writel(MASK_NCE, CFG_SET);
        if (chip_mask)
@@ -166,7 +167,8 @@ static inline void gurnard_rnb_wait(struct gurnard_nand_host *host)
                 ;
 }
 
-static inline void gurnard_write_command(struct gurnard_nand_host *host, uint32_t command)
+static inline void gurnard_write_command(struct gurnard_nand_host *host,
+					 uint32_t command)
 {
         reg_writel(BIT_CLE | BIT_BUFF_CLEAR, CFG_SET);
         reg_writel(command << 24 | command << 16 | command << 8 | command, BYPASS);
@@ -174,7 +176,8 @@ static inline void gurnard_write_command(struct gurnard_nand_host *host, uint32_
         reg_writel(BIT_CLE, CFG_CLR);
 }
 
-static inline void gurnard_write_address(struct gurnard_nand_host *host, uint8_t *address, int address_len)
+static inline void gurnard_write_address(struct gurnard_nand_host *host,
+		uint8_t *address, int address_len)
 {
         uint32_t a;
         reg_writel(BIT_ALE | BIT_BUFF_CLEAR, CFG_SET);
