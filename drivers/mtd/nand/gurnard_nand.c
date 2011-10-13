@@ -15,6 +15,16 @@
  * commands to cope with the 4-way multiplexed NAND bus that we have
  */
 
+/**
+ * FIXME:
+ * Currently we're not caching bad block information. We should have our
+ * own BBT cache. Suggest doint it on-demand (ie: initialise the cache with
+ * "don't know" values, and then when 'isbad' is called, if it says
+ * 'don't know', then read the chip, otherwise return the value from
+ * the table. We should also remember to clear the cache after
+ * we erase a block
+ */
+
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/vmalloc.h>
@@ -51,6 +61,10 @@
 /* If set, then force the NAND devices into mode 0, rather than
  * auto-probing the chips */
 // #define FORCE_SLOW_NAND
+
+/* If set, let the FPGA compare the buffers after a readback. Saves
+ * us transfering the data into the CPU memory */
+#define USE_FPGA_READ_VERIFY
 
 /* The first 4-bytes (32-bit word) of the ecc is the bad-block marker
  * for each of the 4 8-bit devices. We then have 192 bytes of ECC,
@@ -101,7 +115,8 @@ enum {
         MASK_NCE        = 3 << NCE_SHIFT,
         BIT_BUFF_CLEAR  = 1 << 8,
         BIT_VERIFY      = 1 << 9,
-        BIT_RNB         = 1 << 17,
+	BIT_BUFF_EMPTY	= 1 << 16,
+        BIT_RNB         = 1 << 17, 
         BIT_BUSY        = 1 << 18,
         BIT_VERIFY_OK   = 1 << 19,
 };
@@ -124,13 +139,10 @@ struct mode_timing_info mode_timing[] = {
 	[5] = {0x00040002, 0x00200003},
 };
 
-#if 1
+#define BUS_EXPAND(a) ((a) << 24 | (a) << 16 | (a) << 8 | (a))
+
 #define reg_writel(v,r) writel(v, host->reg_base + REG_##r)
 #define reg_readl(r) readl(host->reg_base + REG_##r)
-#else
-#define reg_writel(v,r) { writel(v, host->reg_base + REG_##r); printk("W 0x%x=0x%x\n", REG_##r, v); }
-#define reg_readl(r) ({uint32_t __v = readl(host->reg_base + REG_##r); printk("R 0x%x=0x%x\n", REG_##r, __v); __v;})
-#endif
 
 struct gurnard_nand_host;
 
@@ -167,7 +179,7 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host,
          * selecting the appropriate level in the stack via the STACK ADDR
          * bits in the FPGA CFG_SET/CFG_CLR registers
          */
-       reg_writel(MASK_NCE, CFG_SET);
+       reg_writel(MASK_NCE | BIT_BUFF_CLEAR, CFG_SET);
        if (chip_mask)
                reg_writel((chip_mask & 0x3) << NCE_SHIFT, CFG_CLR);
        if (((reg_readl(CFG_SET) & MASK_NCE) >> NCE_SHIFT) !=
@@ -179,25 +191,37 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host,
 
 static inline void gurnard_busy_wait(struct gurnard_nand_host *host)
 {
-        while (reg_readl(CFG_SET) & BIT_BUSY)
-                ;
+	unsigned long timeo = jiffies + HZ;
+	do {
+		if (!(reg_readl(CFG_SET) & BIT_BUSY))
+			return;
+	} while (time_before(jiffies, timeo));
+	dev_err(&host->pdev->dev,
+		"Timeout waiting for busy signal\n");
+	dump_stack();
 }
 
 static inline void gurnard_rnb_wait(struct gurnard_nand_host *host)
 {
-        // make sure we wait at least 100ns
-        reg_readl(CFG_SET);
-        reg_readl(CFG_SET);
-        reg_readl(CFG_SET);
-        while (!(reg_readl(CFG_SET) & BIT_RNB))
-                ;
+	unsigned long timeo = jiffies + HZ;
+	/* Could take as long as 200ns before RnB changes (tWB) */
+	reg_readl(CFG_SET);
+	reg_readl(CFG_SET);
+	reg_readl(CFG_SET);
+	do {
+		if (reg_readl(CFG_SET) & BIT_RNB)
+			return;
+	} while (time_before(jiffies, timeo));
+	dev_err(&host->pdev->dev,
+		"Timeout waiting for RnB signal\n");
+	dump_stack();
 }
 
 static inline void gurnard_write_command(struct gurnard_nand_host *host,
 					 uint32_t command)
 {
-        reg_writel(BIT_CLE | BIT_BUFF_CLEAR, CFG_SET);
-        reg_writel(command << 24 | command << 16 | command << 8 | command, BYPASS);
+        reg_writel(BIT_CLE, CFG_SET);
+        reg_writel(BUS_EXPAND(command), BYPASS);
         gurnard_busy_wait(host);
         reg_writel(BIT_CLE, CFG_CLR);
 }
@@ -205,20 +229,47 @@ static inline void gurnard_write_command(struct gurnard_nand_host *host,
 static inline void gurnard_write_address(struct gurnard_nand_host *host,
 		uint8_t *address, int address_len)
 {
-        uint32_t a;
-        reg_writel(BIT_ALE | BIT_BUFF_CLEAR, CFG_SET);
+        reg_writel(BIT_ALE, CFG_SET);
         while (address_len--) {
-                a = *address++;
-                a = a << 24 | a << 16 | a << 8 | a;
-                reg_writel(a, BYPASS);
+                uint32_t a = *address++;
+                reg_writel(BUS_EXPAND(a), BYPASS);
                 gurnard_busy_wait(host);
         }
         reg_writel(BIT_ALE, CFG_CLR);
 }
 
+static inline void gurnard_raw_read_buf(struct gurnard_nand_host *host,
+					uint32_t *buf, uint32_t buflen)
+{
+#if 1
+        uint32_t read = 0;
+        /* Note: BUFF_LEN doesn't reduce as we read from it, it is the
+         * count of bytes read since it was last reset
+         */
+        do {
+                uint32_t total_read = reg_readl(BUFF_LEN);
+		uint32_t avail;
+
+               total_read = min(total_read, buflen);
+		avail = (total_read - read) >> 2;
+                if (avail) {
+                        readsl(host->data_base, buf, avail);
+                        read += avail << 2;
+                        buf += avail;
+                }
+        } while (read != buflen);
+#else
+#warning "Using non-optimal read mechanism"
+        gurnard_busy_wait(host);
+        readsl(host->data_base, buf, buflen >> 2);
+#endif
+}
+
 static inline void gurnard_read_buf(struct gurnard_nand_host *host,
 				    uint32_t *buf, uint32_t buflen)
 {
+	if (buflen & 0x3)
+		BUG();
 #if 0
         /* Make sure that we're not accidentally reading from both
          * devices at once. This will cause bus contention
@@ -229,28 +280,8 @@ static inline void gurnard_read_buf(struct gurnard_nand_host *host,
                 dump_stack();
         }
 #endif
-
-#if 1
-        uint32_t read = 0;
-	reg_writel(buflen - 1, BUFF_LEN);
-        /* Note: BUFF_LEN doesn't reduce as we read from it, it is the
-         * count of bytes read since it was last reset
-         */
-        do {
-                uint32_t total = reg_readl(BUFF_LEN);
-		uint32_t avail = (total - read) >> 2;
-                if (avail) {
-                        readsl(host->data_base, buf, avail);
-                        read += avail << 2;
-                        buf += avail;
-                }
-        } while (read != buflen);
-#else
-#warning "Using non-optimal read mechanism"
-	reg_writel(buflen - 1, BUFF_LEN);
-        gurnard_busy_wait(host);
-        readsl(host->data_base, buf, buflen >> 2);
-#endif
+        reg_writel(buflen - 1, BUFF_LEN);
+	gurnard_raw_read_buf(host, buf, buflen);
 }
 
 static inline void gurnard_write_buf(struct gurnard_nand_host *host,
@@ -389,8 +420,6 @@ static int gurnard_get_features(struct gurnard_nand_host *host,
         gurnard_select_chips(host, device_addr);
         gurnard_write_command(host, NAND_CMD_GET_FEATURES);
         gurnard_write_address(host, &feature_addr, 1);
-        /* FIXME: What is the correct delay system here? tWB */
-        udelay(1);
         gurnard_rnb_wait(host);
 	gurnard_read_buf(host, features, 4 * ARRAY_SIZE(features));
         gurnard_select_chips(host, 0);
@@ -585,6 +614,36 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
         return 0;
 }
 
+/**
+ * Trigger the FPGA to read the page, but don't actually transfer
+ * the data out.
+ */
+static void gurnard_nand_read_full_page_dummy(struct mtd_info *mtd,
+		int device_addr, loff_t from, int data, int oob)
+{
+        struct gurnard_nand_stack *stack = mtd->priv;
+        struct gurnard_nand_host *host = stack->host;
+        uint8_t addr[5];
+	uint32_t len;
+
+	gurnard_select_chips(host, device_addr);
+
+        offset_to_page(from, addr);
+        if (!data)
+                addr_to_oob(addr);
+	len = data ? mtd->writesize : 0 +
+	      oob ? mtd->oobsize : 0;
+
+        gurnard_write_command(host, NAND_CMD_READ0);
+        gurnard_write_address(host, addr, 5);
+        gurnard_write_command(host, NAND_CMD_READSTART);
+        gurnard_rnb_wait(host);
+
+	reg_writel(len - 1, BUFF_LEN);
+        gurnard_busy_wait(host);
+	gurnard_select_chips(host, 0);
+}
+
 
 static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                 uint8_t *buf, uint8_t *oob, int max_len)
@@ -594,7 +653,7 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
         uint8_t addr[5];
         uint32_t fpga_ecc[mtd->ecclayout->eccbytes / 4];
         int ret = 0;
-        int i, len;
+        int oob_len;
 
         if (from >= mtd->size)
                 return -EINVAL;
@@ -604,9 +663,12 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                 return -EINVAL;
         }
 
-        if (max_len < 0)
-		max_len = buf ? mtd->writesize : 0 +
-			  oob ? mtd->oobsize : 0;
+	/* We always read at least the oob */
+        if (max_len < 0) {
+		max_len = mtd->oobsize;
+		if (buf)
+			max_len += mtd->writesize;
+	}
 
         /* If this is the raid device, then we actually just read
          * from the first device
@@ -625,8 +687,8 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                 addr_to_oob(addr);
 
 #ifdef RAW_ACCESS_DEBUG
-        printk("read: dev=0x%x 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
-                        stack->device_addr, from,
+        printk("read: len=%d dev=0x%x 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
+                        max_len, stack->device_addr, from,
                         addr[4], addr[3], addr[2], addr[1], addr[0],
                         buf ? " data" : "", oob ? " oob" : "");
 #endif
@@ -639,32 +701,46 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
         gurnard_write_address(host, addr, 5);
         gurnard_write_command(host, NAND_CMD_READSTART);
         gurnard_rnb_wait(host);
-        reg_writel(BIT_BUFF_CLEAR, CFG_SET);
-        if (buf) {
-                gurnard_read_buf(host, (uint32_t *)buf,
-                                min((int)mtd->writesize, max_len));
-                max_len -= mtd->writesize;
-                if (max_len < 0)
-                        max_len = 0;
+	/* Most common case - doing a full page read with oob */
+	if (max_len == mtd->writesize + mtd->oobsize) {
+		reg_writel(max_len - 1, BUFF_LEN);
+		gurnard_raw_read_buf(host, (uint32_t *)buf, mtd->writesize);
+		gurnard_raw_read_buf(host, (uint32_t *)oob, mtd->oobsize);
 
-                /* We've just finished reading the entire page,
-                 * so now read the ECC from the fpga so we
-                 * can compare later
+		/* Drag out the ECC results */
+		readsl(host->reg_base + REG_ECC, fpga_ecc,
+				mtd->ecclayout->eccbytes >> 2);
+
+		oob_len = mtd->oobsize;
+	} else {
+		/* Doing some kind of partial read, either just OOB,
+		 * or a partial page
                  */
-                for (i = 0; i < mtd->ecclayout->eccbytes / 4; i++)
-                        fpga_ecc[i] = reg_readl(ECC);
+                if (buf) {
+                        int buf_len = min((int)mtd->writesize, max_len);
+                        max_len -= buf_len;
+                        gurnard_read_buf(host, (uint32_t *)buf, buf_len);
+
+                        /* We've just finished reading the entire page,
+                         * so now read the ECC from the fpga so we
+                         * can compare later
+                         */
+                        readsl(host->reg_base + REG_ECC, fpga_ecc,
+                                        mtd->ecclayout->eccbytes >> 2);
+
+                        /* Reset the buffers for the OOB read, otherwise when we
+                         * go to read them back we get incorrect counts from BUFF_LEN
+                         */
+                        reg_writel(BIT_BUFF_CLEAR, CFG_SET);
+                }
+
+                oob_len = min((int)mtd->oobsize, max_len);
+                if (oob_len > 0)
+                        gurnard_read_buf(host, (uint32_t *)oob, oob_len);
         }
 
-        /* Reset the buffers for the OOB read, otherwise when we
-         * go to read them back we get incorrect counts from BUFF_LEN
-         */
-        reg_writel(BIT_BUFF_CLEAR, CFG_SET);
-
-        len = min((int)mtd->oobsize, max_len);
-        gurnard_read_buf(host, (uint32_t *)oob, len);
-
         /* If we've read the full page of data, then we can do ECC checking */
-        if (buf && len == mtd->oobsize)
+        if (buf && oob_len == mtd->oobsize)
                 ret = gurnard_ecc_check(mtd, from, buf, oob,
                                 (uint8_t *)fpga_ecc);
 
@@ -716,7 +792,7 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
 
         gurnard_write_command(host, NAND_CMD_SEQIN);
         gurnard_write_address(host, addr, 5);
-        gurnard_rnb_wait(host);
+	udelay(1); /* FIXME: tADL */
         if (buf) {
 		writesl(host->data_base, (uint32_t *)buf, mtd->writesize >> 2);
                 if (auto_ecc && oob) {
@@ -755,35 +831,71 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         }
         gurnard_select_chips(host, 0);
 
+	if (ret)
+		return ret;
+
 #ifdef CONFIG_MTD_NAND_VERIFY_WRITE
-        if (!ret) {
-                /* We've just written a page, so read it back &
-                 * confirm the data is valid */
+	/* We've just written a page, so read it back &
+	 * confirm the data is valid */
+#ifdef USE_FPGA_READ_VERIFY
+	reg_writel(BIT_VERIFY, CFG_SET);
+	if (stack->device_addr == RAID_ADDR) {
+		/* Raid reads need two separate verifications */
+		gurnard_nand_read_full_page_dummy(mtd, 1 << 0, to, buf ? 1 : 0,
+				oob ? 1 : 0);
+		if (!(reg_readl(CFG_SET) & BIT_VERIFY_OK)) {
+			dev_err(&host->pdev->dev,
+				"Write verify failure to Raid(0) at 0x%llx (Offset: %d)\n",
+				to, reg_readl(VERIFY_FAIL));
+			ret = -EIO;
+			goto out;
+		}
+		gurnard_nand_read_full_page_dummy(mtd, 1 << 1, to, buf ? 1 : 0,
+				oob ? 1 : 0);
+		if (!(reg_readl(CFG_SET) & BIT_VERIFY_OK)) {
+			dev_err(&host->pdev->dev,
+				"Write verify failure to Raid(1) at 0x%llx (Offset: %d)\n",
+				to, reg_readl(VERIFY_FAIL));
+			ret = -EIO;
+			goto out;
+		}
+	} else {
+		gurnard_nand_read_full_page_dummy(mtd, stack->device_addr, to,
+				buf ? 1 : 0, oob ? 1 : 0);
+		if (!(reg_readl(CFG_SET) & BIT_VERIFY_OK)) {
+			dev_err(&host->pdev->dev,
+				"Write verify failure to %s at 0x%llx (buf: %p, oob: %p Offset: %d)\n",
+				stack->name, to, buf, oob, reg_readl(VERIFY_FAIL));
+			ret = -EIO;
+			goto out;
+		}
+	}
+out:
+	reg_writel(BIT_VERIFY, CFG_CLR);
+#else
+#warning "Using in-CPU data comparison"
+	ret = gurnard_nand_read_page(mtd, to,
+			buf ? host->data_tmp : NULL,
+			oob ? host->oob_tmp : NULL, -1);
+	if (ret)
+		return ret;
+	if (buf && memcmp(host->data_tmp, buf, mtd->writesize) != 0) {
+		dev_err(&host->pdev->dev,
+				"Write verify failure at 0x%llx\n",
+				to);
+		ret = -EIO;
+	}
 
-                /* FIXME: Should be using the in-fpga read-verify mechanism */
-                ret = gurnard_nand_read_page(mtd, to,
-                                buf ? host->data_tmp : NULL,
-                                oob ? host->oob_tmp : NULL, -1);
-                if (ret)
-                        return ret;
-                if (buf && memcmp(host->data_tmp, buf, mtd->writesize) != 0) {
-                        dev_err(&host->pdev->dev,
-                                "Write verify failure at 0x%llx\n",
-                                to);
-                        ret = -EIO;
-                }
-
-                if (oob && memcmp(host->oob_tmp, oob, mtd->oobsize) != 0) {
-                        dev_err(&host->pdev->dev,
-                                "Write verify oob failure at 0x%llx\n",
-                                to);
-                        ret = -EIO;
-                }
-        }
-
+	if (oob && memcmp(host->oob_tmp, oob, mtd->oobsize) != 0) {
+		dev_err(&host->pdev->dev,
+				"Write verify oob failure at 0x%llx\n",
+				to);
+		ret = -EIO;
+	}
+#endif
+        return ret;
 #endif
 
-        return ret;
 }
 
 static int gurnard_nand_erase_block(struct gurnard_nand_host *host,
@@ -882,6 +994,11 @@ static int gurnard_nand_read(struct mtd_info *mtd, loff_t from, size_t len,
 
         while (cur_addr < from + len) {
                 ret = gurnard_nand_read_page(mtd, cur_addr, buf, NULL, -1);
+                /* FIXME: If we're the raid device, and read_page fails,
+                 * we should read from the other half.
+                 * We should also re-write the page that just failed with
+                 * the good data
+                 */
                 if (ret)
                         break;
                 buf += mtd->writesize;
@@ -1079,7 +1196,9 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
                 return -EINVAL;
         /* FIXME:
          * Should be caching the bad block information, and restoring from
-         * the cache. Can we use the bbt stuff built into mtd?
+         * the cache. Can we use the bbt stuff built into mtd? No, 
+	 * as it is for mtd NAND devices (but we're just an MTD, not a 
+	 * NAND device). Have to roll our own
          */
 
         /* We're only interested in the page at the beginning of the block */
@@ -1088,10 +1207,11 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
         ret = gurnard_nand_read_page(mtd, offs, NULL, (uint8_t *)&oob, 4);
         if (ret)
                 return ret;
-#if 0 //def RAW_ACCESS_DEBUG
-        if (oob != 0xffffffff)
-                printk("block_is_bad: 0x%llx=0x%x\n", offs, oob);
-#endif
+
+	/* FIXME: Some implementations check both the first & second page.
+	 * Do we need to do this as well?
+	 */
+
         return (oob != 0xffffffff);
 }
 
@@ -1185,14 +1305,14 @@ static int gurnard_set_timing_mode(struct gurnard_nand_host *host, int mode)
 	}
 
 	/* Update the NAND devices with the best speed */
-	features[0] = mode       | mode << 8 |
-		      mode << 16 | mode << 24;
+	features[0] = BUS_EXPAND(mode);
 	features[1] = 0;
 	features[2] = 0;
 	features[3] = 0;
 
 	/* Set it on both */
-	ret = gurnard_set_features(host, 3, NAND_TIMING_FEATURE, features);
+	ret = gurnard_set_features(host, RAID_ADDR,
+			NAND_TIMING_FEATURE, features);
 	if (ret < 0)
 		return ret;
 
@@ -1401,6 +1521,7 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                         }
                 }
         }
+	/* We found all the stacks, so create the raid device */
         if (i == MAX_STACKS) {
                 struct gurnard_nand_stack *stack = &host->raid_stack;
                 struct mtd_info *mtd = &stack->mtd;
@@ -1420,13 +1541,11 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
 			 * we make sure the onfi read happens ok
 			 */
 			gurnard_set_timing_mode(host, 0);
-#if 0
 			e = gurnard_autoconfigure_timings(host);
 			if (e < 0) {
 				dev_err(dev, "Unable to configure NAND timings\n");
 				return e;
 			}
-#endif
                         /* Just take the settings from stack 0,
                          * since they're all identical */
                         stack->width = host->stack[0].width;
