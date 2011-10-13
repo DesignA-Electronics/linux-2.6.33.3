@@ -720,16 +720,15 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         gurnard_write_address(host, addr, 5);
         gurnard_rnb_wait(host);
         if (buf) {
-                gurnard_write_buf(host, (uint32_t *)buf, mtd->writesize);
+		writesl(host->data_base, (uint32_t *)buf, mtd->writesize >> 2);
                 if (auto_ecc && oob) {
-                        int i;
 #ifdef USE_FPGA_ECC
                         uint32_t *ecc;
                         ecc = (uint32_t *)&oob[mtd->ecclayout->eccpos[0]];
-
-                        for (i = 0; i < mtd->ecclayout->eccbytes / 4; i++)
-                                *ecc++ = reg_readl(ECC);
+			readsl(host->reg_base + REG_ECC, ecc,
+				mtd->ecclayout->eccbytes / 4);
 #else
+                        int i;
                         for (i = 0; i < mtd->writesize / ECC_CHUNK_SIZE; i++)
                                 __nand_calculate_ecc(&buf[i * ECC_CHUNK_SIZE],
                                                 ECC_CHUNK_SIZE,
@@ -739,7 +738,10 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
                 }
         }
         if (oob)
-                gurnard_write_buf(host, (uint32_t *)oob, mtd->oobsize);
+		writesl(host->data_base, (uint32_t *)oob, mtd->oobsize >> 2);
+
+	/* Wait for the FIFO to full drain */
+        gurnard_busy_wait(host);
 
         gurnard_write_command(host, NAND_CMD_PAGEPROG);
 
