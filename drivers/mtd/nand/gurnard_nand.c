@@ -216,7 +216,8 @@ static inline void gurnard_write_address(struct gurnard_nand_host *host,
         reg_writel(BIT_ALE, CFG_CLR);
 }
 
-static inline void gurnard_read_buf(struct gurnard_nand_host *host, uint32_t *buf, uint32_t buflen)
+static inline void gurnard_read_buf(struct gurnard_nand_host *host,
+				    uint32_t *buf, uint32_t buflen)
 {
 #if 0
         /* Make sure that we're not accidentally reading from both
@@ -228,30 +229,25 @@ static inline void gurnard_read_buf(struct gurnard_nand_host *host, uint32_t *bu
                 dump_stack();
         }
 #endif
-/* FIXME: Issue reading this way from the FPGA.
- * Smarter reading, where we read as they become available rather
- * than wait until until all the data is in the FPGA before we
- * take it out
- */
-#if 0
+
+#if 1
         uint32_t read = 0;
-        reg_writel(buflen - 1, BUFF_LEN);
+	reg_writel(buflen - 1, BUFF_LEN);
         /* Note: BUFF_LEN doesn't reduce as we read from it, it is the
          * count of bytes read since it was last reset
          */
         do {
                 uint32_t total = reg_readl(BUFF_LEN);
-                int32_t avail = total - read;
+		uint32_t avail = (total - read) >> 2;
                 if (avail) {
-                        //printk("%d bytes available %d read %d/%d total\n", avail, read, total, buflen);
-                        readsl(host->data_base, buf, avail >> 2);
-                        read += avail;
-                        buf += avail / 4;
+                        readsl(host->data_base, buf, avail);
+                        read += avail << 2;
+                        buf += avail;
                 }
         } while (read != buflen);
-#endif
-#if 1
-        reg_writel(buflen - 1, BUFF_LEN);
+#else
+#warning "Using non-optimal read mechanism"
+	reg_writel(buflen - 1, BUFF_LEN);
         gurnard_busy_wait(host);
         readsl(host->data_base, buf, buflen >> 2);
 #endif
