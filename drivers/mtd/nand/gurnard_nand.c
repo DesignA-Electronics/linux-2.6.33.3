@@ -257,14 +257,11 @@ static inline void gurnard_read_buf(struct gurnard_nand_host *host, uint32_t *bu
 #endif
 }
 
-static inline void gurnard_write_buf(struct gurnard_nand_host *host, const uint32_t *buf, uint32_t buflen)
+static inline void gurnard_write_buf(struct gurnard_nand_host *host,
+				     const uint32_t *buf, uint32_t buflen)
 {
-        //int i;
-        //for (i = 0; i < buflen >> 2; i++)
-                //writel(buf[i], host->data_base);
         writesl(host->data_base, buf, buflen >> 2);
         gurnard_busy_wait(host);
-
 }
 
 static inline int n_way_match(uint32_t v, int n)
