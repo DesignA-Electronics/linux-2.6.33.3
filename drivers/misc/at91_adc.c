@@ -18,6 +18,7 @@
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/clk.h>
+#include <linux/mutex.h>
 #include <linux/wait.h>
 #include <linux/platform_device.h>
 
@@ -34,6 +35,7 @@ struct at91_adc {
         int irq;
         int adc_vals[8];
         struct completion converted;
+	struct mutex mutex;
 
         struct at91_adc_data *data;
 };
@@ -44,15 +46,15 @@ struct at91_adc {
 static void __init at91_adc_hwinit(struct at91_adc *adc)
 {
         int i;
-	
+
 	/* Reset the ADC system */
         at91_adc_write(adc, AT91_ADC_CR, AT91_ADC_SWRST);
-	
+
         /* Set up the prescale, startup & sample times */
-        at91_adc_write(adc, AT91_ADC_MR, (adc->data->prescale << 8 | 
-					  adc->data->startup << 16 | 
+        at91_adc_write(adc, AT91_ADC_MR, (adc->data->prescale << 8 |
+					  adc->data->startup << 16 |
 					  adc->data->sample << 24));
-		       
+
         /* Enable all the interrupts */
         for (i = 0; i < ARRAY_SIZE(adc->data->gpios); i++)
                 if (adc->data->gpios[i] >= 0) {
@@ -80,18 +82,19 @@ static irqreturn_t at91_adc_irq(int irq, void *dev_id)
 							 AT91_ADC_CDR_MASK);
                 }
         }
-	
+
         complete(&adc->converted);
         return IRQ_HANDLED;
 }
 
 int at91_adc_get_value(struct at91_adc *adc, int channel)
 {
+	mutex_lock(&adc->mutex);
         init_completion(&adc->converted);
-        
+
 	/* Enable the channel */
         at91_adc_write(adc, AT91_ADC_CHER, 1 << channel);
-	
+
 	/* Start the conversion */
         at91_adc_write(adc, AT91_ADC_CR, AT91_ADC_START);
 
@@ -99,6 +102,7 @@ int at91_adc_get_value(struct at91_adc *adc, int channel)
 
 	/* Disable the channel */
         at91_adc_write(adc, AT91_ADC_CHDR, 1 << channel);
+	mutex_unlock(&adc->mutex);
         return adc->adc_vals[channel];
 }
 EXPORT_SYMBOL(at91_adc_get_value);
@@ -160,7 +164,7 @@ static int __init at91_adc_probe(struct platform_device *pdev)
         if (!irq_res)
                 return -ENXIO;
 
-        if (!request_mem_region(res->start, res->end - res->start + 1, 
+        if (!request_mem_region(res->start, res->end - res->start + 1,
                                 "at91_adc"))
                 return -EBUSY;
 
@@ -172,6 +176,7 @@ static int __init at91_adc_probe(struct platform_device *pdev)
         adc->irq = irq_res->start;
         adc->dev = &pdev->dev;
         adc->data = (struct at91_adc_data *)pdev->dev.platform_data;
+	mutex_init(&adc->mutex);
 
         adc->base = ioremap(res->start, res->end - res->start + 1);
         if (!adc->base) {
@@ -191,7 +196,7 @@ static int __init at91_adc_probe(struct platform_device *pdev)
         }
         clk_enable(adc->clk);            /* enable peripheral clock */
 
-        rc = request_irq(adc->irq, at91_adc_irq, IRQF_DISABLED, 
+        rc = request_irq(adc->irq, at91_adc_irq, IRQF_DISABLED,
                         pdev->name, adc);
         if (rc != 0) {
                 dev_err(adc->dev, "cannot claim IRQ\n");
@@ -203,7 +208,7 @@ static int __init at91_adc_probe(struct platform_device *pdev)
                 goto fail4;
 
         platform_set_drvdata(pdev, adc);
-       
+
         at91_adc_hwinit (adc);
         dev_info(adc->dev, "AT91 ADC driver.\n");
         return 0;
@@ -256,7 +261,7 @@ static int at91_adc_suspend(struct platform_device *pdev, pm_message_t mesg)
 static int at91_adc_resume(struct platform_device *pdev)
 {
         struct at91_adc *adc = platform_get_drvdata(pdev);
-	
+
         return clk_enable(adc->clk);
 }
 
