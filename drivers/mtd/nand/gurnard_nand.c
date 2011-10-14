@@ -15,16 +15,6 @@
  * commands to cope with the 4-way multiplexed NAND bus that we have
  */
 
-/**
- * FIXME:
- * Currently we're not caching bad block information. We should have our
- * own BBT cache. Suggest doint it on-demand (ie: initialise the cache with
- * "don't know" values, and then when 'isbad' is called, if it says
- * 'don't know', then read the chip, otherwise return the value from
- * the table. We should also remember to clear the cache after
- * we erase a block
- */
-
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/vmalloc.h>
@@ -65,6 +55,19 @@
 /* If set, let the FPGA compare the buffers after a readback. Saves
  * us transfering the data into the CPU memory */
 #define USE_FPGA_READ_VERIFY
+
+/* If set, intelligently cache the BBT information from the OOB */
+#define USE_BBT_CACHE
+
+#ifdef USE_BBT_CACHE
+/* Bit settings in the bbt cache */
+enum {
+	BLOCK_UNKNOWN = 0,
+	BLOCK_GOOD    = 1,
+	BLOCK_BAD     = 2,
+	BLOCK_MASK    = 3,
+};
+#endif
 
 /* The first 4-bytes (32-bit word) of the ecc is the bad-block marker
  * for each of the 4 8-bit devices. We then have 192 bytes of ECC,
@@ -152,6 +155,10 @@ struct gurnard_nand_stack {
         char name[20];
         struct mtd_info mtd;
         uint8_t width; /* How many chips wide is it (1-4) */
+#ifdef USE_BBT_CACHE
+	uint8_t *bbt; /* Array of two-bit values indicating whether a block
+			 is bad, good, or unknown */
+#endif
 };
 
 struct gurnard_nand_host {
@@ -171,10 +178,6 @@ struct gurnard_nand_host {
 static inline void gurnard_select_chips(struct gurnard_nand_host *host,
 		unsigned int chip_mask)
 {
-        /* FIXME: Should we be aquiring a lock if chip_mask is non-zero, and
-         * clearing the lock if it is zero, or does the MTD layer cover us
-         * for this?
-         */
         /* FIXME: Should be taking the page address as an argument, and
          * selecting the appropriate level in the stack via the STACK ADDR
          * bits in the FPGA CFG_SET/CFG_CLR registers
@@ -182,11 +185,6 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host,
        reg_writel(MASK_NCE | BIT_BUFF_CLEAR, CFG_SET);
        if (chip_mask)
                reg_writel((chip_mask & 0x3) << NCE_SHIFT, CFG_CLR);
-       if (((reg_readl(CFG_SET) & MASK_NCE) >> NCE_SHIFT) !=
-               (~(chip_mask) & 0x3))
-                dev_err(&host->pdev->dev,
-                        "Unable to apply NCE settings (mask=%d reg=0x%x)\n",
-                                chip_mask, reg_readl(CFG_SET));
 }
 
 static inline void gurnard_busy_wait(struct gurnard_nand_host *host)
@@ -344,6 +342,16 @@ static inline void offset_to_block(uint64_t from, uint8_t *addr)
         addr[0] = from;
         addr[1] = from >> 8;
         addr[2] = from >> 16;
+}
+
+static inline uint32_t offset_to_block_id(uint64_t block)
+{
+	/* FIXME: Should be dividing by erasesize */
+	/* 12 = 4096 byte pages
+	 * 2 because of the 4-way chips
+	 * 6 because 64 pages/block
+	 */
+	return block >> (12 + 2 + 6);
 }
 
 /**
@@ -518,12 +526,44 @@ static int gurnard_read_id(struct gurnard_nand_host *host, uint32_t device_addr,
         return 0;
 }
 
-static int gurnard_read_status(struct gurnard_nand_host *host)
+static inline int gurnard_read_stack_status(struct gurnard_nand_stack *stack)
 {
-        uint32_t status;
+        struct gurnard_nand_host *host = stack->host;
+	uint32_t status;
+
+        gurnard_select_chips(host, stack->device_addr);
         gurnard_write_command(host, NAND_CMD_STATUS);
-        gurnard_read_buf(host, &status, 4);
+	/**
+	 * Since we do this after a write, and we then want
+	 * to do a read-verify, we can't clear the fifo.
+	 * The BUFF_LEN value is actually the absolute
+	 * fifo position to read to, not the number of bytes. 
+	 */
+        reg_writel(reg_readl(BUFF_LEN) + 4 - 1, BUFF_LEN);
+	gurnard_raw_read_buf(host, &status, 4);
+        gurnard_select_chips(host, 0);
+
         return status;
+}
+
+static inline int gurnard_read_status(struct gurnard_nand_stack *stack)
+{
+	/* Raid status needs to be read twice and intelligently combined */
+        if (stack->device_addr == RAID_ADDR) {
+		uint32_t status0, status1;
+		struct gurnard_nand_host *host = stack->host;
+
+		status0 = gurnard_read_stack_status(&host->stack[0]);
+		status1 = gurnard_read_stack_status(&host->stack[1]);
+
+		/* Combined the nWP, RDY & ARDY signals as &
+		 * But the FAIL & FAILC signals as |
+		 * Skip all the 'reserved' bits
+		 */
+		return ((status0 & 0xe0) & (status1 & 0xe0)) |
+		       ((status0 & 0x03) | (status1 & 0x3));
+	} else
+		return gurnard_read_stack_status(stack);
 }
 
 /**
@@ -727,11 +767,6 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
                          */
                         readsl(host->reg_base + REG_ECC, fpga_ecc,
                                         mtd->ecclayout->eccbytes >> 2);
-
-                        /* Reset the buffers for the OOB read, otherwise when we
-                         * go to read them back we get incorrect counts from BUFF_LEN
-                         */
-                        reg_writel(BIT_BUFF_CLEAR, CFG_SET);
                 }
 
                 oob_len = min((int)mtd->oobsize, max_len);
@@ -766,14 +801,6 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
                 return -EINVAL;
         }
 
-#if 0
-        /* Is this a problem? */
-        if (auto_ecc && (!oob || !buf))
-                dev_warn(&host->pdev->dev,
-                        "Page write at 0x%llx with automatic ecc, "
-                        "but no oob/data provided\n", to);
-#endif
-
         gurnard_select_chips(host, stack->device_addr);
 
         offset_to_page(to, addr);
@@ -788,7 +815,6 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
                         addr[4], addr[3], addr[2], addr[1], addr[0],
                         buf ? " data" : "", oob ? " oob" : "");
 #endif
-
 
         gurnard_write_command(host, NAND_CMD_SEQIN);
         gurnard_write_address(host, addr, 5);
@@ -820,8 +846,9 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
         gurnard_write_command(host, NAND_CMD_PAGEPROG);
 
         gurnard_rnb_wait(host);
+        gurnard_select_chips(host, 0);
 
-        status = gurnard_read_status(host);
+        status = gurnard_read_status(stack);
 
         /* If bit 0 on any of the chips is set indicates an erase failure */
         if (status & 0x03030303) {
@@ -829,7 +856,6 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
                                 to, status);
                 ret = -EIO;
         }
-        gurnard_select_chips(host, 0);
 
 	if (ret)
 		return ret;
@@ -898,31 +924,47 @@ out:
 
 }
 
-static int gurnard_nand_erase_block(struct gurnard_nand_host *host,
+static int gurnard_nand_erase_block(struct gurnard_nand_stack *stack,
                 loff_t block_addr)
 {
         char addr[3];
         uint32_t status;
+        struct gurnard_nand_host *host = stack->host;
 
 #ifdef RAW_ACCESS_DEBUG
         printk("erase block: 0x%llx\n", block_addr);
 #endif
-
+        gurnard_select_chips(host, stack->device_addr);
         offset_to_block(block_addr, addr);
         gurnard_write_command(host, NAND_CMD_ERASE1);
         gurnard_write_address(host, addr, ARRAY_SIZE(addr));
         gurnard_write_command(host, NAND_CMD_ERASE2);
         gurnard_rnb_wait(host);
-        status = gurnard_read_status(host);
+        gurnard_select_chips(host, 0);
+
+        status = gurnard_read_status(stack);
 
         /* If bit 0 on any of the chips is set indicates an erase failure */
-        if (status & 0x01010101) {
+        if (status & 0x03030303) {
                 dev_err(&host->pdev->dev, "Erase failure at 0x%llx: 0x%x\n",
                                 block_addr, status);
                 return -EIO;
         }
         return 0;
 }
+
+#ifdef USE_BBT_CACHE
+/* Set the cached BBT value */
+static inline void gurnard_block_bbt_set(struct gurnard_nand_stack *stack, 
+		int block, int marker)
+{
+	/* Clear the old marker */
+	stack->bbt[block / 4] &= BLOCK_MASK << ((block & 3) * 2);
+	/* Set the new one */
+	stack->bbt[block / 4] |= marker << ((block & 3) * 2);
+}
+#endif
+
 
 /**
  * MTD Interface functions
@@ -945,14 +987,17 @@ static int gurnard_nand_erase(struct mtd_info *mtd, struct erase_info *instr)
                         stack->device_addr, instr->addr, instr->len);
 #endif
 
-        gurnard_select_chips(host, stack->device_addr);
         while (erased < instr->len && cur_addr < mtd->size && ret == 0) {
-                ret = gurnard_nand_erase_block(host, cur_addr);
+#ifdef USE_BBT_CACHE
+		/* Clear out the bbt */
+		gurnard_block_bbt_set(stack, offset_to_block_id(cur_addr),
+				BLOCK_UNKNOWN);
+#endif
+                ret = gurnard_nand_erase_block(stack, cur_addr);
 
                 erased += mtd->erasesize;
                 cur_addr += mtd->erasesize;
         }
-        gurnard_select_chips(host, 0);
 
         if (ret == 0) {
                 instr->state = MTD_ERASE_DONE;
@@ -1079,11 +1124,12 @@ static int gurnard_nand_write_oob(struct mtd_info *mtd, loff_t to,
 
         cur_addr = to;
 
-        while (cur_addr < to + len && !ret) {
+        while (len && !ret) {
                 ret = gurnard_nand_write_page(mtd, cur_addr, buf, oob, auto_ecc);
                 if (buf)
                         buf += mtd->writesize;
                 cur_addr += mtd->writesize;
+		len -= mtd->writesize;
         }
 
         if (buf)
@@ -1189,30 +1235,64 @@ static int gurnard_nand_read_oob(struct mtd_info *mtd, loff_t from,
 
 static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
 {
+        struct gurnard_nand_stack *stack = mtd->priv;
         uint32_t oob;
         int ret;
+	int block;
+	uint8_t marker;
+	int bad;
 
         if (offs > mtd->size)
                 return -EINVAL;
-        /* FIXME:
-         * Should be caching the bad block information, and restoring from
-         * the cache. Can we use the bbt stuff built into mtd? No, 
-	 * as it is for mtd NAND devices (but we're just an MTD, not a 
-	 * NAND device). Have to roll our own
-         */
+	/* We're only interested in the page at the beginning of the block */
+	offs = offs & ~(mtd->erasesize - 1);
 
-        /* We're only interested in the page at the beginning of the block */
-        offs = offs & ~(mtd->erasesize - 1);
+#ifdef USE_BBT_CACHE
+	block = offset_to_block_id(offs);
+	marker = stack->bbt[block / 4];
+	marker = (marker >> (block & 3) * 2) & 0x3;
+	if (marker == BLOCK_UNKNOWN) {
+#endif
+		if (stack->device_addr == RAID_ADDR) {
+			struct gurnard_nand_host *host = stack->host;
+			/* Check stack 0 */
+			ret = gurnard_nand_read_page(&host->stack[0].mtd,
+					offs, NULL, (uint8_t *)&oob, 4);
+			if (ret)
+				return ret;
+			bad = oob != 0xffffffff;
 
-        ret = gurnard_nand_read_page(mtd, offs, NULL, (uint8_t *)&oob, 4);
-        if (ret)
-                return ret;
+			/* If stack 0 is ok, check stack 1 */
+			if (!bad) {
+				ret = gurnard_nand_read_page(&host->stack[1].mtd,
+						offs, NULL, (uint8_t *)&oob, 4);
+				if (ret)
+					return ret;
+				bad = oob != 0xffffffff;
+			}
+		} else {
+			ret = gurnard_nand_read_page(mtd, offs, NULL, 
+					(uint8_t *)&oob, 4);
+			if (ret)
+				return ret;
+			bad = oob != 0xffffffff;
+		}
 
-	/* FIXME: Some implementations check both the first & second page.
-	 * Do we need to do this as well?
-	 */
+		/* FIXME: Some implementations check both the first & second page.
+		 * Do we need to do this as well? The NAND datasheet doesn't
+		 * mention it
+		 */
 
-        return (oob != 0xffffffff);
+#ifndef USE_BBT_CACHE
+		return bad;
+#else
+		marker = bad ? BLOCK_BAD : BLOCK_GOOD;
+		gurnard_block_bbt_set(stack, block, marker);
+
+	}
+
+	return marker == BLOCK_BAD;
+#endif
 }
 
 static int gurnard_block_mark_bad(struct mtd_info *mtd, loff_t offs)
@@ -1222,6 +1302,9 @@ static int gurnard_block_mark_bad(struct mtd_info *mtd, loff_t offs)
 
         memset(host->oob_tmp, 0xff, mtd->oobsize);
         host->oob_tmp[0] = 0;
+#ifdef USE_BBT_CACHE
+	gurnard_block_bbt_set(stack, offset_to_block_id(offs), BLOCK_BAD);
+#endif
 
         return gurnard_nand_write_page(mtd, offs, NULL, host->oob_tmp, 0);
 }
@@ -1251,12 +1334,13 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
                 return -EINVAL;
         }
         memset(host->oob_tmp, 0xff, mtd->oobsize);
-        while (cur_addr < to + len) {
+        while (len) {
                 ret = gurnard_nand_write_page(mtd, cur_addr, buf, host->oob_tmp, 1);
                 if (ret < 0)
                         break;
                 buf += mtd->writesize;
                 cur_addr += mtd->writesize;
+		len -= mtd->writesize;
         }
         *retlen = cur_addr - to;
         //printk("nand_write done: %d 0x%llx\n", ret, cur_addr - to);
@@ -1348,7 +1432,9 @@ static int gurnard_autoconfigure_timings(struct gurnard_nand_host *host)
 	char buf[256];
 	uint16_t timing_mode;
 
-	/* FIXME: Should be reading timings from both stack 1 & 2 */
+	/* FIXME: Should be reading timings from both stack 1 & 2.
+	 * We don't really support disparat NAND stacks, so not doing this
+	 * is ok. */
 
 	ret = gurnard_read_onfi(host, 1, buf);
 	if (ret < 0)
@@ -1490,6 +1576,20 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 //mtd->size = 128 * 1024 * 1024;
                 mtd->oobsize = oobsize * 4;
 
+		if (mtd->erasesize != 0x00100000) {
+			dev_err(dev, "Stack %d: Need to have 1MB/block sizes (0x%x)\n", 
+					i, mtd->writesize);
+			mtd->priv = NULL;
+			continue;
+		}
+
+#ifdef USE_BBT_CACHE
+		/* We need two bits for each block, so can fit 4
+		 * into each byte. 0 values indicate unknwon */
+		stack->bbt = vmalloc(offset_to_block_id(mtd->size) / 4);
+		memset(stack->bbt, 0, offset_to_block_id(mtd->size) / 4);
+#endif
+
                 /* We don't have partitions on this device, just
                  * a single large area
                  */
@@ -1568,6 +1668,13 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                         mtd->erasesize = host->stack[0].mtd.erasesize;
                         mtd->size = host->stack[0].mtd.size;
                         mtd->oobsize = host->stack[0].mtd.oobsize;
+
+#ifdef USE_BBT_CACHE
+			/* We need two bits for each block, so can fit 4
+			 * into each byte. 0 values indicate unknwon */
+			stack->bbt = vmalloc(offset_to_block_id(mtd->size) / 4);
+			memset(stack->bbt, 0, offset_to_block_id(mtd->size) / 4);
+#endif
 
                         /* We don't have partitions on this device, just
                          * a single large area
@@ -1779,11 +1886,20 @@ static int __exit gurnard_nand_remove(struct platform_device *pdev)
         struct gurnard_nand_host *host = platform_get_drvdata(pdev);
         int i;
 
-        for (i = 0; i < MAX_STACKS; i++)
+        for (i = 0; i < MAX_STACKS; i++) {
                 if (host->stack[i].mtd.priv)
                                 del_mtd_device(&host->stack[i].mtd);
+#ifdef USE_BBT_CACHE
+		if (host->stack[i].bbt)
+			vfree(host->stack[i].bbt);
+#endif
+	}
         if (host->raid_stack.mtd.priv)
                 del_mtd_device(&host->raid_stack.mtd);
+#ifdef USE_BBT_CACHE
+	if (host->raid_stack.bbt)
+		vfree(host->raid_stack.bbt);
+#endif
 
         if (host->oob_tmp)
                 kfree(host->oob_tmp);
