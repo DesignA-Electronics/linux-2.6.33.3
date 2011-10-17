@@ -56,8 +56,9 @@
  * us transfering the data into the CPU memory */
 #define USE_FPGA_READ_VERIFY
 
-/* If set, intelligently cache the BBT information from the OOB */
-#define USE_BBT_CACHE
+/* If set, intelligently cache the BBT information from the OOB. This
+ * results in fewer reads of the OOB, which should speed up YAFFS */
+//#define USE_BBT_CACHE
 
 #ifdef USE_BBT_CACHE
 /* Bit settings in the bbt cache */
@@ -119,7 +120,7 @@ enum {
         BIT_BUFF_CLEAR  = 1 << 8,
         BIT_VERIFY      = 1 << 9,
 	BIT_BUFF_EMPTY	= 1 << 16,
-        BIT_RNB         = 1 << 17, 
+        BIT_RNB         = 1 << 17,
         BIT_BUSY        = 1 << 18,
         BIT_VERIFY_OK   = 1 << 19,
 };
@@ -537,7 +538,7 @@ static inline int gurnard_read_stack_status(struct gurnard_nand_stack *stack)
 	 * Since we do this after a write, and we then want
 	 * to do a read-verify, we can't clear the fifo.
 	 * The BUFF_LEN value is actually the absolute
-	 * fifo position to read to, not the number of bytes. 
+	 * fifo position to read to, not the number of bytes.
 	 */
         reg_writel(reg_readl(BUFF_LEN) + 4 - 1, BUFF_LEN);
 	gurnard_raw_read_buf(host, &status, 4);
@@ -576,6 +577,8 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
 {
         struct gurnard_nand_stack *stack = mtd->priv;
         struct gurnard_nand_host *host = stack->host;
+	/* FIXME: It is assumed that the ECC data is all contiguous
+	 * in the OOB */
         uint8_t *nand_ecc = &oob[mtd->ecclayout->eccpos[0]];
         int i;
 #if !defined(USE_FPGA_ECC) || defined(VERIY_FPGA_ECC_CALC)
@@ -617,6 +620,24 @@ static int gurnard_ecc_check(struct mtd_info *mtd, loff_t addr,
 
         if (memcmp(fpga_ecc, nand_ecc, mtd->ecclayout->eccbytes) == 0)
                 return 0;
+
+	/* If the block is all 0xff, then we're ok with an all
+	 * 0xff ecc, as that is just an erased page
+	 */
+	for (i = 0; i < mtd->writesize; i++)
+		if (buf[i] != 0xff)
+			break;
+
+	/* If the page is all 0xff, check the ecc */
+	if (i == mtd->writesize) {
+		for (i = 0; i < mtd->ecclayout->eccbytes; i++)
+			if (nand_ecc[i] != 0xff)
+				break;
+		/* All 0xff in both data & ECC? Then we're just
+		 * looking at an erased page, which is fine */
+		if (i == mtd->ecclayout->eccbytes)
+			return 0;
+	}
 
         dev_warn(&host->pdev->dev, "ECC Error at 0x%llx\n", addr);
         /* Iterate over each 256 byte block checking if it is valid -
@@ -709,6 +730,13 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
 		if (buf)
 			max_len += mtd->writesize;
 	}
+
+	/* If we've asked for a read of > writesize, then that means 
+	 * we want to do an oob & data read into a single buffer
+	 */
+	if (max_len > mtd->writesize)
+		if (!oob)
+			oob = &buf[mtd->writesize];
 
         /* If this is the raid device, then we actually just read
          * from the first device
@@ -955,13 +983,29 @@ static int gurnard_nand_erase_block(struct gurnard_nand_stack *stack,
 
 #ifdef USE_BBT_CACHE
 /* Set the cached BBT value */
-static inline void gurnard_block_bbt_set(struct gurnard_nand_stack *stack, 
+static void gurnard_block_bbt_set(struct gurnard_nand_stack *stack,
 		int block, int marker)
 {
-	/* Clear the old marker */
-	stack->bbt[block / 4] &= BLOCK_MASK << ((block & 3) * 2);
-	/* Set the new one */
-	stack->bbt[block / 4] |= marker << ((block & 3) * 2);
+	/* The raid stack doesn't have a cache, it
+	 * just refers to the underlying stacks */
+	if (stack->device_addr == RAID_ADDR) {
+		struct gurnard_nand_host *host = stack->host;
+		gurnard_block_bbt_set(&host->stack[0], block, marker);
+		gurnard_block_bbt_set(&host->stack[1], block, marker);
+	} else {
+		/* Clear the old marker */
+		stack->bbt[block / 4] &= BLOCK_MASK << ((block & 3) * 2);
+		/* Set the new one */
+		stack->bbt[block / 4] |= marker << ((block & 3) * 2);
+	}
+}
+
+static inline uint8_t gurnard_block_bbt_get(struct gurnard_nand_stack *stack,
+		int block)
+{
+	if (stack->device_addr == RAID_ADDR)
+		BUG();
+	return (stack->bbt[block / 4] >> ((block & 3) * 2)) & BLOCK_MASK;
 }
 #endif
 
@@ -1238,61 +1282,50 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
         struct gurnard_nand_stack *stack = mtd->priv;
         uint32_t oob;
         int ret;
+	int bad;
+#ifdef USE_BBT_CACHE
 	int block;
 	uint8_t marker;
-	int bad;
+#endif
 
         if (offs > mtd->size)
                 return -EINVAL;
+
+	/* For the raid device, check it off on both underlying pages */
+	if (stack->device_addr == RAID_ADDR) {
+		struct gurnard_nand_host *host = stack->host;
+		ret = gurnard_block_is_bad(&host->stack[0].mtd, offs);
+		if (ret)
+			return ret;
+		return gurnard_block_is_bad(&host->stack[1].mtd, offs);
+	}
+
 	/* We're only interested in the page at the beginning of the block */
 	offs = offs & ~(mtd->erasesize - 1);
 
 #ifdef USE_BBT_CACHE
 	block = offset_to_block_id(offs);
-	marker = stack->bbt[block / 4];
-	marker = (marker >> (block & 3) * 2) & 0x3;
+	marker = gurnard_block_bbt_get(stack, block);
 	if (marker == BLOCK_UNKNOWN) {
 #endif
-		if (stack->device_addr == RAID_ADDR) {
-			struct gurnard_nand_host *host = stack->host;
-			/* Check stack 0 */
-			ret = gurnard_nand_read_page(&host->stack[0].mtd,
-					offs, NULL, (uint8_t *)&oob, 4);
-			if (ret)
-				return ret;
-			bad = oob != 0xffffffff;
-
-			/* If stack 0 is ok, check stack 1 */
-			if (!bad) {
-				ret = gurnard_nand_read_page(&host->stack[1].mtd,
-						offs, NULL, (uint8_t *)&oob, 4);
-				if (ret)
-					return ret;
-				bad = oob != 0xffffffff;
-			}
-		} else {
-			ret = gurnard_nand_read_page(mtd, offs, NULL, 
-					(uint8_t *)&oob, 4);
-			if (ret)
-				return ret;
-			bad = oob != 0xffffffff;
-		}
+		ret = gurnard_nand_read_page(mtd, offs, NULL,
+				(uint8_t *)&oob, 4);
+		if (ret)
+			return ret;
+		bad = oob != 0xffffffff;
 
 		/* FIXME: Some implementations check both the first & second page.
 		 * Do we need to do this as well? The NAND datasheet doesn't
 		 * mention it
 		 */
-
-#ifndef USE_BBT_CACHE
-		return bad;
-#else
-		marker = bad ? BLOCK_BAD : BLOCK_GOOD;
+#ifdef USE_BBT_CACHE
+		/* Make sure the cache is up to date */
+		marker = (bad ? BLOCK_BAD : BLOCK_GOOD);
 		gurnard_block_bbt_set(stack, block, marker);
-
-	}
-
-	return marker == BLOCK_BAD;
+	} else
+		bad = (marker == BLOCK_BAD);
 #endif
+	return bad;
 }
 
 static int gurnard_block_mark_bad(struct mtd_info *mtd, loff_t offs)
@@ -1303,10 +1336,23 @@ static int gurnard_block_mark_bad(struct mtd_info *mtd, loff_t offs)
         memset(host->oob_tmp, 0xff, mtd->oobsize);
         host->oob_tmp[0] = 0;
 #ifdef USE_BBT_CACHE
-	gurnard_block_bbt_set(stack, offset_to_block_id(offs), BLOCK_BAD);
+	/* Make it unknown, since we're just about to read it back
+	 * to confirm */
+	gurnard_block_bbt_set(stack, offset_to_block_id(offs), BLOCK_UNKNOWN);
 #endif
 
-        return gurnard_nand_write_page(mtd, offs, NULL, host->oob_tmp, 0);
+	/* Ignore any error messages, as its quite likely that the verify,
+	 * or ecc could cause a failure
+	 */
+        gurnard_nand_write_page(mtd, offs, NULL, host->oob_tmp, 0);
+
+	if (gurnard_block_is_bad(mtd, offs) < 0) {
+		dev_err(&host->pdev->dev,
+			"Setting block 0x%llx to bad, but it didn't take\n",
+			offs);
+		return -EIO;
+	}
+	return 0;
 }
 
 static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
@@ -1577,7 +1623,7 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 mtd->oobsize = oobsize * 4;
 
 		if (mtd->erasesize != 0x00100000) {
-			dev_err(dev, "Stack %d: Need to have 1MB/block sizes (0x%x)\n", 
+			dev_err(dev, "Stack %d: Need to have 1MB/block sizes (0x%x)\n",
 					i, mtd->writesize);
 			mtd->priv = NULL;
 			continue;
@@ -1670,10 +1716,9 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                         mtd->oobsize = host->stack[0].mtd.oobsize;
 
 #ifdef USE_BBT_CACHE
-			/* We need two bits for each block, so can fit 4
-			 * into each byte. 0 values indicate unknwon */
-			stack->bbt = vmalloc(offset_to_block_id(mtd->size) / 4);
-			memset(stack->bbt, 0, offset_to_block_id(mtd->size) / 4);
+			/* The raid device uses the BBT cache from the
+			 * separate stacks */
+			stack->bbt = NULL;
 #endif
 
                         /* We don't have partitions on this device, just
