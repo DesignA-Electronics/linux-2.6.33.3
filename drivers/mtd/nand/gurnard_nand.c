@@ -37,7 +37,7 @@
 #define MAX_STACKS      2
 #define MAX_OOBSIZE 512
 #define MAX_WRITESIZE 8192
-#define RAID_ADDR 3 /* Address toe access in the FPGA to get both devices */
+#define RAID_ADDR 3 /* Address to access in the FPGA to get both devices */
 
 /* Display debugging each time we do a low-level NAND access */
 // #define RAW_ACCESS_DEBUG
@@ -58,7 +58,7 @@
 
 /* If set, intelligently cache the BBT information from the OOB. This
  * results in fewer reads of the OOB, which should speed up YAFFS */
-//#define USE_BBT_CACHE
+#define USE_BBT_CACHE
 
 #ifdef USE_BBT_CACHE
 /* Bit settings in the bbt cache */
@@ -249,7 +249,7 @@ static inline void gurnard_raw_read_buf(struct gurnard_nand_host *host,
                 uint32_t total_read = reg_readl(BUFF_LEN);
 		uint32_t avail;
 
-               total_read = min(total_read, buflen);
+		total_read = min(total_read, buflen);
 		avail = (total_read - read) >> 2;
                 if (avail) {
                         readsl(host->data_base, buf, avail);
@@ -281,6 +281,12 @@ static inline void gurnard_read_buf(struct gurnard_nand_host *host,
 #endif
         reg_writel(buflen - 1, BUFF_LEN);
 	gurnard_raw_read_buf(host, buf, buflen);
+	if (reg_readl(BUFF_LEN) != buflen) {
+		dev_err(&host->pdev->dev,
+				"Read buffer, but lengths don't line up: %d vs %d\n",
+				reg_readl(BUFF_LEN), buflen);
+		//BUG();
+	}
 }
 
 static inline void gurnard_write_buf(struct gurnard_nand_host *host,
@@ -348,9 +354,9 @@ static inline void offset_to_block(uint64_t from, uint8_t *addr)
 static inline uint32_t offset_to_block_id(uint64_t block)
 {
 	/* FIXME: Should be dividing by erasesize */
-	/* 12 = 4096 byte pages
-	 * 2 because of the 4-way chips
-	 * 6 because 64 pages/block
+	/* 12 because 2^12 = 4096 byte pages
+	 * 2 because of the 2^2 = 4-way chips
+	 * 6 because 2^6 = 64 pages/block
 	 */
 	return block >> (12 + 2 + 6);
 }
@@ -360,6 +366,7 @@ static inline uint32_t offset_to_block_id(uint64_t block)
  */
 static void gurnard_reset(struct gurnard_nand_host *host, uint32_t device_mask)
 {
+	/* Make sure all of the fifos from the FPGA are drained */
         gurnard_select_chips(host, device_mask);
         gurnard_write_command(host, NAND_CMD_RESET);
         gurnard_rnb_wait(host);
@@ -731,12 +738,11 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
 			max_len += mtd->writesize;
 	}
 
-	/* If we've asked for a read of > writesize, then that means 
+	/* If we've asked for a read of > writesize, then that means
 	 * we want to do an oob & data read into a single buffer
 	 */
-	if (max_len > mtd->writesize)
-		if (!oob)
-			oob = &buf[mtd->writesize];
+	if (max_len > mtd->writesize && !oob)
+		oob = &buf[mtd->writesize];
 
         /* If this is the raid device, then we actually just read
          * from the first device
@@ -774,6 +780,12 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
 		reg_writel(max_len - 1, BUFF_LEN);
 		gurnard_raw_read_buf(host, (uint32_t *)buf, mtd->writesize);
 		gurnard_raw_read_buf(host, (uint32_t *)oob, mtd->oobsize);
+		if (reg_readl(BUFF_LEN) != max_len) {
+			dev_err(&host->pdev->dev,
+				"Read buffer, but lengths don't line up: %d vs %d\n",
+				reg_readl(BUFF_LEN), max_len);
+			//BUG();
+		}
 
 		/* Drag out the ECC results */
 		readsl(host->reg_base + REG_ECC, fpga_ecc,
@@ -984,25 +996,27 @@ static int gurnard_nand_erase_block(struct gurnard_nand_stack *stack,
 #ifdef USE_BBT_CACHE
 /* Set the cached BBT value */
 static void gurnard_block_bbt_set(struct gurnard_nand_stack *stack,
-		int block, int marker)
+		loff_t offset, int marker)
 {
 	/* The raid stack doesn't have a cache, it
 	 * just refers to the underlying stacks */
 	if (stack->device_addr == RAID_ADDR) {
 		struct gurnard_nand_host *host = stack->host;
-		gurnard_block_bbt_set(&host->stack[0], block, marker);
-		gurnard_block_bbt_set(&host->stack[1], block, marker);
+		gurnard_block_bbt_set(&host->stack[0], offset, marker);
+		gurnard_block_bbt_set(&host->stack[1], offset, marker);
 	} else {
+		int block = offset_to_block_id(offset);
 		/* Clear the old marker */
-		stack->bbt[block / 4] &= BLOCK_MASK << ((block & 3) * 2);
+		stack->bbt[block / 4] &= ~(BLOCK_MASK << ((block & 3) * 2));
 		/* Set the new one */
 		stack->bbt[block / 4] |= marker << ((block & 3) * 2);
 	}
 }
 
 static inline uint8_t gurnard_block_bbt_get(struct gurnard_nand_stack *stack,
-		int block)
+		loff_t offset)
 {
+	int block = offset_to_block_id(offset);
 	if (stack->device_addr == RAID_ADDR)
 		BUG();
 	return (stack->bbt[block / 4] >> ((block & 3) * 2)) & BLOCK_MASK;
@@ -1034,7 +1048,7 @@ static int gurnard_nand_erase(struct mtd_info *mtd, struct erase_info *instr)
         while (erased < instr->len && cur_addr < mtd->size && ret == 0) {
 #ifdef USE_BBT_CACHE
 		/* Clear out the bbt */
-		gurnard_block_bbt_set(stack, offset_to_block_id(cur_addr),
+		gurnard_block_bbt_set(stack, cur_addr,
 				BLOCK_UNKNOWN);
 #endif
                 ret = gurnard_nand_erase_block(stack, cur_addr);
@@ -1284,7 +1298,6 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
         int ret;
 	int bad;
 #ifdef USE_BBT_CACHE
-	int block;
 	uint8_t marker;
 #endif
 
@@ -1301,11 +1314,10 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
 	}
 
 	/* We're only interested in the page at the beginning of the block */
-	offs = offs & ~(mtd->erasesize - 1);
+	offs &= ~(mtd->erasesize - 1);
 
 #ifdef USE_BBT_CACHE
-	block = offset_to_block_id(offs);
-	marker = gurnard_block_bbt_get(stack, block);
+	marker = gurnard_block_bbt_get(stack, offs);
 	if (marker == BLOCK_UNKNOWN) {
 #endif
 		ret = gurnard_nand_read_page(mtd, offs, NULL,
@@ -1314,14 +1326,10 @@ static int gurnard_block_is_bad(struct mtd_info *mtd, loff_t offs)
 			return ret;
 		bad = oob != 0xffffffff;
 
-		/* FIXME: Some implementations check both the first & second page.
-		 * Do we need to do this as well? The NAND datasheet doesn't
-		 * mention it
-		 */
 #ifdef USE_BBT_CACHE
 		/* Make sure the cache is up to date */
 		marker = (bad ? BLOCK_BAD : BLOCK_GOOD);
-		gurnard_block_bbt_set(stack, block, marker);
+		gurnard_block_bbt_set(stack, offs, marker);
 	} else
 		bad = (marker == BLOCK_BAD);
 #endif
@@ -1333,12 +1341,16 @@ static int gurnard_block_mark_bad(struct mtd_info *mtd, loff_t offs)
         struct gurnard_nand_stack *stack = mtd->priv;
         struct gurnard_nand_host *host = stack->host;
 
+	/* We're only interested in the page at the beginning of the block */
+	offs &= ~(mtd->erasesize - 1);
+
         memset(host->oob_tmp, 0xff, mtd->oobsize);
+	/* Set the bad-block marker to 0 */
         host->oob_tmp[0] = 0;
 #ifdef USE_BBT_CACHE
 	/* Make it unknown, since we're just about to read it back
 	 * to confirm */
-	gurnard_block_bbt_set(stack, offset_to_block_id(offs), BLOCK_UNKNOWN);
+	gurnard_block_bbt_set(stack, offs, BLOCK_UNKNOWN);
 #endif
 
 	/* Ignore any error messages, as its quite likely that the verify,
@@ -1352,6 +1364,7 @@ static int gurnard_block_mark_bad(struct mtd_info *mtd, loff_t offs)
 			offs);
 		return -EIO;
 	}
+
 	return 0;
 }
 
@@ -1394,18 +1407,20 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
         return ret;
 }
 
-static int gurnard_get_timing_mode(struct gurnard_nand_host *host)
+static int gurnard_get_timing_mode(struct gurnard_nand_host *host,
+		uint32_t *modep)
 {
 	uint8_t features[4];
 	int ret;
-	int mode;
+	uint32_t mode;
 
 	ret = gurnard_get_features(host, 1, NAND_TIMING_FEATURE, features);
 	if (ret < 0)
 		return ret;
 
-	mode = (int)features[0];
+	mode = features[0];
 
+	/* Confirm that Stack 2 is the same as Stack 1 */
 	ret = gurnard_get_features(host, 2, NAND_TIMING_FEATURE, features);
 	if (ret < 0)
 		return ret;
@@ -1417,13 +1432,15 @@ static int gurnard_get_timing_mode(struct gurnard_nand_host *host)
 		return -EINVAL;
 	}
 
-	return mode;
+	*modep = mode;
+
+	return 0;
 }
 
-static int gurnard_set_timing_mode(struct gurnard_nand_host *host, int mode)
+static int gurnard_set_timing_mode(struct gurnard_nand_host *host, uint32_t mode)
 {
 	uint32_t features[4];
-	int new_mode;
+	uint32_t new_mode;
 	int ret;
 
 	if (mode < 0 || mode > ARRAY_SIZE(mode_timing)) {
@@ -1446,7 +1463,9 @@ static int gurnard_set_timing_mode(struct gurnard_nand_host *host, int mode)
 	if (ret < 0)
 		return ret;
 
-	new_mode = gurnard_get_timing_mode(host);
+	ret = gurnard_get_timing_mode(host, &new_mode);
+	if (ret < 0)
+		return ret;
 	if (new_mode != mode) {
 		dev_err(&host->pdev->dev,
 			"Set mode to 0x%x, but it didn't apply: 0x%x\n",
@@ -1470,7 +1489,7 @@ static int gurnard_set_timing_mode(struct gurnard_nand_host *host, int mode)
 static int gurnard_autoconfigure_timings(struct gurnard_nand_host *host)
 {
 	int ret;
-	int best_mode;
+	uint32_t best_mode;
 
 #ifdef FORCE_SLOW_NAND
 	best_mode = 0;
@@ -1523,7 +1542,7 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 if (!host->oob_tmp) {
                         dev_err(dev, "Unable to allocate %d bytes of oob area\n",
                                         MAX_OOBSIZE);
-                        return -1;
+                        return -ENOMEM;
                 }
         }
 
@@ -1532,10 +1551,16 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 if (!host->data_tmp) {
                         dev_err(dev, "Unable to allocate %d bytes of data area\n",
                                         MAX_WRITESIZE);
-                        return -1;
+                        return -ENOMEM;
                 }
         }
 
+	/* Force the device into mode 0, just so
+	 * we make sure the onfi read happens ok
+	 */
+	res = gurnard_set_timing_mode(host, 0);
+	if (res < 0)
+		return res;
 
         for (i = 0; i < MAX_STACKS; i++) {
                 struct gurnard_nand_stack *stack = &host->stack[i];
@@ -1683,10 +1708,6 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
 
                         gurnard_reset(host, stack->device_addr);
 
-			/* Force the device into mode 0, just so
-			 * we make sure the onfi read happens ok
-			 */
-			gurnard_set_timing_mode(host, 0);
 			e = gurnard_autoconfigure_timings(host);
 			if (e < 0) {
 				dev_err(dev, "Unable to configure NAND timings\n");
@@ -1821,11 +1842,12 @@ static ssize_t read_timing_mode(struct device *dev, struct device_attribute *att
 {
         struct platform_device *pdev = to_platform_device(dev);
         struct gurnard_nand_host *host = platform_get_drvdata(pdev);
-	int mode;
+	uint32_t mode;
+	int ret;
 
-	mode = gurnard_get_timing_mode(host);
-	if (mode < 0)
-		return mode;
+	ret = gurnard_get_timing_mode(host, &mode);
+	if (ret < 0)
+		return ret;
 	return sprintf(buf, "%d\n", mode);
 }
 
