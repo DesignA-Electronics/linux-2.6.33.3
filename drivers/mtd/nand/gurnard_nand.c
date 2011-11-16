@@ -48,10 +48,6 @@
 /* Actually use the FPGA ECC results */
 #define USE_FPGA_ECC
 
-/* If set, then force the NAND devices into mode 0, rather than
- * auto-probing the chips */
-// #define FORCE_SLOW_NAND
-
 /* If set, let the FPGA compare the buffers after a readback. Saves
  * us transfering the data into the CPU memory */
 #define USE_FPGA_READ_VERIFY
@@ -59,6 +55,18 @@
 /* If set, intelligently cache the BBT information from the OOB. This
  * results in fewer reads of the OOB, which should speed up YAFFS */
 #define USE_BBT_CACHE
+
+/* If set, the FPGA supports timing changes, and so we can change
+ * the ONFI timing mode
+ */
+#define USE_TIMING_MODE
+
+/* If set, then force the NAND devices into mode 0, rather than
+ * auto-probing the chips.
+ * Only makes a difference if 'USE_TIMING_MODE' is defined
+ */
+// #define FORCE_SLOW_NAND
+
 
 #ifdef USE_BBT_CACHE
 /* Bit settings in the bbt cache */
@@ -107,8 +115,10 @@ enum {
         REG_CFG_SET     = 0x000,
         REG_CFG_CLR     = 0x004,
         REG_BYPASS      = 0x008,
+#ifdef USE_TIMING_MODE
 	REG_RD_TIMER	= 0x010,
 	REG_WR_TIMER	= 0x014,
+#endif
         REG_VERIFY_FAIL = 0x01c,
         REG_BUFF_LEN    = 0x200,
         REG_ECC         = 0x400,
@@ -125,6 +135,7 @@ enum {
         BIT_VERIFY_OK   = 1 << 19,
 };
 
+#ifdef USE_TIMING_MODE
 struct mode_timing_info {
 	uint32_t wr_timer;
 	uint32_t rd_timer;
@@ -142,6 +153,7 @@ struct mode_timing_info mode_timing[] = {
 	[4] = {0x00080006, 0x00200003},
 	[5] = {0x00040002, 0x00200003},
 };
+#endif
 
 #define BUS_EXPAND(a) ((a) << 24 | (a) << 16 | (a) << 8 | (a))
 
@@ -179,6 +191,10 @@ struct gurnard_nand_host {
 static inline void gurnard_select_chips(struct gurnard_nand_host *host,
 		unsigned int chip_mask)
 {
+	if (!(reg_readl(CFG_SET) & BIT_RNB))
+		dev_warn(&host->pdev->dev,
+				"Selecting chips %d, but devices not ready\n",
+				chip_mask);
         /* FIXME: Should be taking the page address as an argument, and
          * selecting the appropriate level in the stack via the STACK ADDR
          * bits in the FPGA CFG_SET/CFG_CLR registers
@@ -217,7 +233,7 @@ static inline void gurnard_rnb_wait(struct gurnard_nand_host *host)
 }
 
 static inline void gurnard_write_command(struct gurnard_nand_host *host,
-					 uint32_t command)
+					 uint8_t command)
 {
         reg_writel(BIT_CLE, CFG_SET);
         reg_writel(BUS_EXPAND(command), BYPASS);
@@ -395,8 +411,11 @@ static int gurnard_read_onfi(struct gurnard_nand_host *host, uint32_t device_add
         gurnard_select_chips(host, device_addr);
         gurnard_write_command(host, NAND_CMD_READPARAM);
         gurnard_write_address(host, &addr, 1);
-        /* FIXME: What is the correct delay system here? */
-        udelay(100);
+	/* The datasheet says that RnB should go low here,
+	 * but it doesn't seem to be doing that, so do a fixed
+	 * delay as well to be safe */
+        gurnard_rnb_wait(host);
+        udelay(25); /* tR */
         gurnard_read_buf(host, id, 256 * 4);
         gurnard_select_chips(host, 0);
 
@@ -411,9 +430,13 @@ static int gurnard_read_onfi(struct gurnard_nand_host *host, uint32_t device_add
 	}
 
         for (i = 0; i < 256; i++) {
-                if (!n_way_match(id[i], 4))
-                        dev_err(&host->pdev->dev, "Parameters mismatch at %d: 0x%8.8x",
-                                        i, id[i]);
+                if (!n_way_match(id[i], 4)) {
+                        dev_err(&host->pdev->dev,
+				"ONFI mismatch between chips at %d: 0x%8.8x\n",
+                                i, id[i]);
+			vfree(id);
+			return -ENODEV;
+		}
                 *buf++ = id[i] & 0xff;
         }
 	vfree(id);
@@ -443,8 +466,9 @@ static int gurnard_get_features(struct gurnard_nand_host *host,
         if (!n_way_match(features[0], 4) || !n_way_match(features[1], 4) ||
             !n_way_match(features[2], 4) || !n_way_match(features[3], 4)) {
                 dev_err(&host->pdev->dev,
-                                "Features do not match between chips: "
+                                "Device %d: Features do not match between chips: "
                                 "0x%x 0x%x 0x%x 0x%x\n",
+				device_addr,
                                 features[0], features[1],
 				features[2], features[3]);
                 return -EINVAL;
@@ -466,6 +490,7 @@ static int gurnard_set_features(struct gurnard_nand_host *host,
         /* FIXME: What is the correct delay system here? tADL */
         udelay(1);
 	gurnard_write_buf(host, features, 16);
+        gurnard_rnb_wait(host);
         gurnard_select_chips(host, 0);
 
 	return 0;
@@ -1407,6 +1432,7 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
         return ret;
 }
 
+#ifdef USE_TIMING_MODE
 static int gurnard_get_timing_mode(struct gurnard_nand_host *host,
 		uint32_t *modep)
 {
@@ -1437,7 +1463,7 @@ static int gurnard_get_timing_mode(struct gurnard_nand_host *host,
 	return 0;
 }
 
-static int gurnard_set_timing_mode(struct gurnard_nand_host *host, uint32_t mode)
+static int gurnard_set_timing_mode(struct gurnard_nand_host *host, uint8_t mode)
 {
 	uint32_t features[4];
 	uint32_t new_mode;
@@ -1527,6 +1553,34 @@ static int gurnard_autoconfigure_timings(struct gurnard_nand_host *host)
 
 	return 0;
 }
+#endif
+
+static ssize_t force_release(struct device *dev, struct device_attribute *attr,
+                           const char *buf, size_t count)
+{
+        struct platform_device *pdev = to_platform_device(dev);
+        struct gurnard_nand_host *host = platform_get_drvdata(pdev);
+	int i;
+
+	for (i = 0; i < MAX_STACKS; i++) {
+		if (host->stack[i].mtd.priv) {
+			del_mtd_device(&host->stack[i].mtd);
+			host->stack[i].mtd.priv = NULL;
+		}
+#ifdef USE_BBT_CACHE
+		if (host->stack[i].bbt) {
+			vfree(host->stack[i].bbt);
+			host->stack[i].bbt = NULL;
+		}
+#endif
+	}
+	if (host->raid_stack.mtd.priv) {
+		del_mtd_device(&host->raid_stack.mtd);
+		host->raid_stack.mtd.priv = NULL;
+	}
+
+	return count;
+}
 
 static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                            const char *buf, size_t count)
@@ -1554,13 +1608,16 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                         return -ENOMEM;
                 }
         }
-
+	/* Reset the devices */
+	gurnard_reset(host, RAID_ADDR);
+#ifdef USE_TIMING_MODE
 	/* Force the device into mode 0, just so
 	 * we make sure the onfi read happens ok
 	 */
 	res = gurnard_set_timing_mode(host, 0);
 	if (res < 0)
 		return res;
+#endif
 
         for (i = 0; i < MAX_STACKS; i++) {
                 struct gurnard_nand_stack *stack = &host->stack[i];
@@ -1708,11 +1765,13 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
 
                         gurnard_reset(host, stack->device_addr);
 
+#ifdef USE_TIMING_MODE
 			e = gurnard_autoconfigure_timings(host);
 			if (e < 0) {
 				dev_err(dev, "Unable to configure NAND timings\n");
 				return e;
 			}
+#endif
                         /* Just take the settings from stack 0,
                          * since they're all identical */
                         stack->width = host->stack[0].width;
@@ -1822,6 +1881,7 @@ static ssize_t reset(struct device *dev, struct device_attribute *attr,
         return count;
 }
 
+#ifdef USE_TIMING_MODE
 static ssize_t write_timing_mode(struct device *dev, struct device_attribute *attr,
 		const char *buf, size_t count)
 {
@@ -1851,23 +1911,29 @@ static ssize_t read_timing_mode(struct device *dev, struct device_attribute *att
 	return sprintf(buf, "%d\n", mode);
 }
 
+static DEVICE_ATTR(timing_mode, S_IWUSR | S_IRUGO, read_timing_mode,
+						   write_timing_mode);
+#endif /* USE_TIMING_MODE */
+
 static DEVICE_ATTR(probe, S_IWUSR, NULL, force_probe);
+static DEVICE_ATTR(release, S_IWUSR, NULL, force_release);
 static DEVICE_ATTR(id0, S_IRUGO, read_id_0, NULL);
 static DEVICE_ATTR(id1, S_IRUGO, read_id_1, NULL);
 static DEVICE_ATTR(onfi0, S_IRUGO, read_onfi_0, NULL);
 static DEVICE_ATTR(onfi1, S_IRUGO, read_onfi_1, NULL);
 static DEVICE_ATTR(reset, S_IWUSR, NULL, reset);
-static DEVICE_ATTR(timing_mode, S_IWUSR | S_IRUGO, read_timing_mode,
-						   write_timing_mode);
 
 static struct attribute *gurnard_attributes[] = {
+	&dev_attr_release.attr,
         &dev_attr_probe.attr,
         &dev_attr_reset.attr,
         &dev_attr_id0.attr,
         &dev_attr_id1.attr,
         &dev_attr_onfi0.attr,
         &dev_attr_onfi1.attr,
+#ifdef USE_TIMING_MODE
 	&dev_attr_timing_mode.attr,
+#endif
         NULL,
 };
 
@@ -1963,10 +2029,6 @@ static int __exit gurnard_nand_remove(struct platform_device *pdev)
 	}
         if (host->raid_stack.mtd.priv)
                 del_mtd_device(&host->raid_stack.mtd);
-#ifdef USE_BBT_CACHE
-	if (host->raid_stack.bbt)
-		vfree(host->raid_stack.bbt);
-#endif
 
         if (host->oob_tmp)
                 kfree(host->oob_tmp);
