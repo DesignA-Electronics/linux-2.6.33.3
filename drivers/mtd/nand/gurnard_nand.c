@@ -65,7 +65,7 @@
  * auto-probing the chips.
  * Only makes a difference if 'USE_TIMING_MODE' is defined
  */
-// #define FORCE_SLOW_NAND
+//#define FORCE_SLOW_NAND
 
 
 #ifdef USE_BBT_CACHE
@@ -193,10 +193,19 @@ struct gurnard_nand_host {
 static inline void gurnard_select_chips(struct gurnard_nand_host *host,
 		unsigned int chip_mask)
 {
+	/* Chips should never be busy when we're toggling the nCE lines */
 	if (!(reg_readl(CFG_SET) & BIT_RNB))
 		dev_warn(&host->pdev->dev,
 				"Selecting chips %d, but devices not ready\n",
 				chip_mask);
+
+	/* If we're selecting a chip, then there should be nothing in the 
+	 * write fifos
+	 */
+	if (chip_mask && reg_readl(BUFF_LEN))
+		dev_warn(&host->pdev->dev,
+				"Selecting chips %d, but fpga fifo is at %d\n",
+				chip_mask, reg_readl(BUFF_LEN));
         /* FIXME: Should be taking the page address as an argument, and
          * selecting the appropriate level in the stack via the STACK ADDR
          * bits in the FPGA CFG_SET/CFG_CLR registers
@@ -383,6 +392,7 @@ static inline void offset_to_block(uint64_t from, uint8_t *addr)
         addr[2] = from >> 16;
 }
 
+#ifdef USE_BBT_CACHE
 static inline uint32_t offset_to_block_id(uint64_t block)
 {
 	/* FIXME: Should be dividing by erasesize */
@@ -392,6 +402,7 @@ static inline uint32_t offset_to_block_id(uint64_t block)
 	 */
 	return block >> (12 + 2 + 6);
 }
+#endif
 
 /**
  * High level NAND command functions
@@ -966,7 +977,7 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
 	reg_writel(BIT_VERIFY, CFG_SET);
 	if (stack->device_addr == RAID_ADDR) {
 		/* Raid reads need two separate verifications */
-		gurnard_nand_read_full_page_dummy(mtd, STACK_ADDR(0), 
+		gurnard_nand_read_full_page_dummy(mtd, STACK_ADDR(0),
 				to, buf ? 1 : 0, oob ? 1 : 0);
 		if (!(reg_readl(CFG_SET) & BIT_VERIFY_OK)) {
 			dev_err(&host->pdev->dev,
@@ -975,7 +986,7 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
 			ret = -EIO;
 			goto out;
 		}
-		gurnard_nand_read_full_page_dummy(mtd, STACK_ADDR(1), 
+		gurnard_nand_read_full_page_dummy(mtd, STACK_ADDR(1),
 				to, buf ? 1 : 0, oob ? 1 : 0);
 		if (!(reg_readl(CFG_SET) & BIT_VERIFY_OK)) {
 			dev_err(&host->pdev->dev,
@@ -1031,7 +1042,8 @@ static int gurnard_nand_erase_block(struct gurnard_nand_stack *stack,
         struct gurnard_nand_host *host = stack->host;
 
 #ifdef RAW_ACCESS_DEBUG
-        printk("erase block: 0x%llx\n", block_addr);
+        printk("erase block: dev=%d block_addr=0x%llx\n", 
+			stack->device_addr, block_addr);
 #endif
         gurnard_select_chips(host, stack->device_addr);
         offset_to_block(block_addr, addr);
@@ -1048,9 +1060,8 @@ static int gurnard_nand_erase_block(struct gurnard_nand_stack *stack,
 	 * the FAIL bit (bit 0)
 	 */
         if (status & 0x01010101) {
-		uint32_t stat2 = gurnard_read_status(host, stack->device_addr);
-                dev_err(&host->pdev->dev, "Erase failure at 0x%llx: 0x%x 0x%x\n",
-                                block_addr, status, stat2);
+                dev_err(&host->pdev->dev, "Erase failure at 0x%llx: 0x%x\n",
+                                block_addr, status);
                 return -EIO;
         }
         return 0;
@@ -1568,7 +1579,7 @@ static int gurnard_autoconfigure_timings(struct gurnard_nand_host *host)
 
 	/* FIXME: Should be reading timings from both stack 1 & 2.
 	 * We don't really support disparat NAND stacks, so not doing this
-	 * is ok. */
+	 * is probably ok. */
 
 	ret = gurnard_read_onfi(host, 1, buf);
 	if (ret < 0)
