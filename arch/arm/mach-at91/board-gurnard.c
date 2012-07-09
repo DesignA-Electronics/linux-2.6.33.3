@@ -34,6 +34,7 @@
 #include <mach/gpio.h>
 #include <mach/at91sam9_smc.h>
 #include <mach/at91_shdwc.h>
+#include <mach/gurnard_debug_gpios.h>
 
 #include "sam9_smc.h"
 #include "generic.h"
@@ -43,6 +44,7 @@
 #define PWR_HOLD_GPIO   AT91_PIN_PB16
 
 #define FPGA_IRQ        AT91SAM9G45_ID_IRQ0
+#define FPGA_IRQ_GPIO	AT91_PIN_PD18
 #define FPGA_IRQ_LEVEL  IRQ_TYPE_LEVEL_LOW
 
 /* Taken from 7.3 of document gurnard 06 */
@@ -56,6 +58,8 @@
 
 #define FPGA_NAND_CTRL_PHYS          (FPGA_ROM_PHYS + 0x02000000)
 #define FPGA_NAND_DATA_PHYS          (FPGA_ROM_PHYS + 0x02800000)
+
+#define FPGA_EMULATION_PHYS	(FPGA_ROM_PHYS + 0x03000000)
 
 #define FPGA_ROM_REG(x) (*(volatile uint32_t *)(FPGA_ROM_VIRT + (x)))
 #define FPGA_ID         FPGA_ROM_REG(0x00)
@@ -116,32 +120,61 @@ static void __init gurnard_map_io(void)
  * FPGA interrupt counter
  */
 static uint32_t fpga_irq_count = 0;
+static uint32_t fpga_irq_enabled = 0;
 
 static void gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
-        uint32_t pending = FPGA_IFR;
+        uint32_t pending;
+        //uint32_t id;
+
+	gpio_debug_set(DBG_PIN_FPGA_IRQ, 1);
+
+	pending = FPGA_IFR;
+
+	if (!fpga_irq_enabled) {
+                pr_err("Gurnard FPGA IRQ, but FPGA not programmed\n");
+		/* Acknowledge it, in case the FPGA was programmed prior
+		 * to Linux starting
+		 */
+		gpio_debug_set(DBG_PIN_FPGA_IRQ, 0);
+		FPGA_IFR = pending;
+                return;
+	}
+
+	/**
+	 * 24/05/2012 - removed the ID check
+	 * We've enabled the pull-up on the GPIO, so I don't believe
+	 * that this check is still necessary.
+	 * Each read from the FPGA takes 300ns, so removing the ID
+	 * read reduces our IRQ latency by about 1/3
+	 */
+#if 0
+        id = FPGA_ID;
 
         /**
          * If the FPGA is not programmed, then skip it.
          * These spurious interrupts can happen during the programming
          * of the FPGA
          **/
-        if ((FPGA_ID & 0xffff0000) != 0x000d0000 &&
-            (FPGA_ID & 0xffff0000) != 0x00010000) {
+        if ((id & 0xffff0000) != 0x000d0000 &&
+            (id & 0xffff0000) != 0x00010000) {
                 pr_err("Gurnard FPGA IRQ, but FPGA not programmed\n");
                 return;
         }
+#endif
 
         fpga_irq_count++;
 
         do {
                 if (likely(pending)) {
                         irq = BOARD_IRQ(0) + __ffs(pending);
+			pr_err("FPGA IRQ: 0x%x irq=%d/%d\n", pending, irq, irq - BOARD_IRQ(0));
                         generic_handle_irq(irq);
                         FPGA_IFR = 1 << (irq - BOARD_IRQ(0));
                 }
                 pending = FPGA_IFR;
         } while (pending);
+	gpio_debug_set(DBG_PIN_FPGA_IRQ, 0);
 }
 
 static void gurnard_mask_irq(unsigned int irq)
@@ -168,17 +201,19 @@ static void __init gurnard_init_irq(void)
         int irq;
 	at91sam9g45_init_interrupts(NULL);
 
+        /* Disable all current IRQs */
+        FPGA_IER = 0;
         /* Until the FPGA is programmed, the IRQ pin will float.
          * Turn on the in-CPU pull-up to prevent this being a problem
          */
-        at91_set_gpio_input(FPGA_IRQ, 1);
+        at91_set_gpio_input(FPGA_IRQ_GPIO, 1);
 
         /* The Gurnard FPGA has two irqs - one for NAND and one for
            emulation
          */
         for (irq = BOARD_IRQ(0); irq <= BOARD_IRQ(1); irq++) {
                 set_irq_chip(irq, &gurnard_irq_chip);
-                set_irq_handler(irq, handle_level_irq);
+                set_irq_handler(irq, handle_simple_irq);
                 set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
         }
 
@@ -473,6 +508,42 @@ FPGA_REG_SHOW(ID);
 FPGA_REG_SHOW(EMULATION);
 FPGA_REG_SHOW(BUILD_DATE);
 
+static struct resource gurnard_emulation_resources[] = {
+	[0] = { /* Control registers */
+		.start	= FPGA_EMULATION_PHYS,
+		.end	= (FPGA_EMULATION_PHYS + 0x1000) - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+        [1] = {
+                .start  = BOARD_IRQ(1),
+                .end    = BOARD_IRQ(1),
+                .flags  = IORESOURCE_IRQ,
+        },
+};
+
+static struct platform_device gurnard_emulation_device = {
+	.name		= "gurnard_emulation",
+	.resource	= gurnard_emulation_resources,
+	.num_resources	= ARRAY_SIZE(gurnard_emulation_resources),
+};
+
+static ssize_t fpga_irq_enable_write(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	uint32_t val = simple_strtol(buf, NULL, 0);
+	gpio_debug_set(DBG_PIN_FPGA_IRQ_EN, val);
+	fpga_irq_enabled = val;
+	return count;
+}
+
+static ssize_t fpga_irq_enable_read(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", fpga_irq_enabled);
+}
+static DEVICE_ATTR(irq_enable, S_IRUGO | S_IWUSR, fpga_irq_enable_read,
+		fpga_irq_enable_write);
+
 static ssize_t fpga_irq_count_show(struct device *dev,
                 struct device_attribute *attr, char *buf)
 {
@@ -506,6 +577,7 @@ static const struct attribute *fpga_attrs[] = {
         &dev_attr_BUILD_DATE.attr,
         &dev_attr_BUILD_DATE_STR.attr,
         &dev_attr_irq_count.attr,
+	&dev_attr_irq_enable.attr,
         NULL,
 };
 
@@ -521,6 +593,8 @@ static void __init gurnard_fpga_init(void)
 	platform_device_register(&gurnard_fpga_device);
         /* FPGA NAND */
 	platform_device_register(&gurnard_nand_device);
+        /* FPGA Emulation interface (Tape/MO etc...) */
+	platform_device_register(&gurnard_emulation_device);
 
         /* FPGA memory timings */
 	sam9_smc_configure(0, &gurnard_fpga_smc_config);
@@ -560,6 +634,9 @@ static void __init gurnard_board_init(void)
 	at91_set_gpio_output(AT91_PIN_PA8, 1);
 	at91_set_gpio_value(AT91_PIN_PA8, 0);
 	at91_add_device_mci(0, &gurnard_mmc_data);
+
+        /* Init the debug gpios to a known state */
+        gpio_debug_init();
 }
 
 MACHINE_START(GURNARD, "Gurnard")
