@@ -168,7 +168,6 @@ static void gurnard_irq_handler(unsigned int irq, struct irq_desc *desc)
         do {
                 if (likely(pending)) {
                         irq = BOARD_IRQ(0) + __ffs(pending);
-			pr_err("FPGA IRQ: 0x%x irq=%d/%d\n", pending, irq, irq - BOARD_IRQ(0));
                         generic_handle_irq(irq);
                         FPGA_IFR = 1 << (irq - BOARD_IRQ(0));
                 }
