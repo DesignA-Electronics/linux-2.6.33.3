@@ -197,7 +197,8 @@ static int macb_mii_probe(struct net_device *dev)
 	for (phy_addr = 0; phy_addr < PHY_MAX_ADDR; phy_addr++) {
 		if (bp->mii_bus->phy_map[phy_addr]) {
 			phydev = bp->mii_bus->phy_map[phy_addr];
-			break;
+			if (phydev->phy_id)
+				break;
 		}
 	}
 
