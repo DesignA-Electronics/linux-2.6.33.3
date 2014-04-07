@@ -9,6 +9,22 @@
 #define DBG_PIN_NAND_BUSY	10 /* Set when we're waiting for the FPGA to drain */
 #define DBG_PIN_NAND_RNB	 9 /* Set when we're waiting for RnB */
 #define DBG_PIN_FPGA_IRQ_EN	 8
+#define DBG_PIN_MO_WAITING       7 /* Set when we're waiting for a userspace
+                                    * response
+				    */
+#define DBG_PIN_MO_STORAGE_READ	 6 /* Set when we're reading from the MO
+				    * backing store (ie: from NAND flash)
+				    */
+#define DBG_PIN_MO_STORAGE_WRITE 5 /* Set when we're writing to the MO
+				    * backing store (ie: from NAND flash)
+				    */
+#define DBG_PIN_MO_QUEUE_BLOCK 4 /* Set when user space is blocked on the
+				    command queue */
+#define DBG_PIN_MO_QUEUE_EMPTY 3 /* Set when user space is blocked on the
+				    command queue */
+#define DBG_PIN_MO_USER_SPACE  2 /* Set when user space is handling something
+                                    from the SCSI queue */
+#define DBG_PIN_TEST           0 /* For temporary testing */
 
 #if /*defined(KERNEL) && */ defined(CONFIG_ARCH_AT91)
 #include <mach/gpio.h>
