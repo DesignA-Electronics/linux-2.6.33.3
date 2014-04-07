@@ -23,6 +23,7 @@
 #define __ATMEL_LCDC_H__
 
 #include <linux/workqueue.h>
+#include <linux/completion.h>
 
 /* Way LCD wires are connected to the chip:
  * Some Atmel chips use BGR color mode (instead of standard RGB)
@@ -41,6 +42,7 @@ struct atmel_lcdfb_info {
 	void __iomem		*mmio;
 	int			irq_base;
 	struct work_struct	task;
+        struct completion       vsync;
 
 	unsigned int		guard_time;
 	unsigned int 		smem_len;
@@ -216,5 +218,7 @@ struct atmel_lcdfb_info {
 #define	ATMEL_LCDC_MERI		(1 << 6)
 
 #define ATMEL_LCDC_LUT(n)	(0x0c00 + ((n)*4))
+
+#define FBIO_WAITFORVSYNC    _IOW('F', 0x20, __u32)
 
 #endif /* __ATMEL_LCDC_H__ */

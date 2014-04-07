@@ -364,6 +364,8 @@ static int atmel_lcdfb_check_var(struct fb_var_screeninfo *var,
 	/* Force same alignment for each line */
 	var->xres = (var->xres + 3) & ~3UL;
 	var->xres_virtual = (var->xres_virtual + 3) & ~3UL;
+	/* Ensure we can support double buffering */
+	var->yres_virtual = max(var->yres_virtual, var->yres * 2);
 
 	var->red.msb_right = var->green.msb_right = var->blue.msb_right = 0;
 	var->transp.msb_right = 0;
@@ -603,7 +605,8 @@ static int atmel_lcdfb_set_par(struct fb_info *info)
 	/* Disable all interrupts */
 	lcdc_writel(sinfo, ATMEL_LCDC_IDR, ~0UL);
 	/* Enable FIFO & DMA errors */
-	lcdc_writel(sinfo, ATMEL_LCDC_IER, ATMEL_LCDC_UFLWI | ATMEL_LCDC_OWRI | ATMEL_LCDC_MERI);
+	lcdc_writel(sinfo, ATMEL_LCDC_IER, ATMEL_LCDC_UFLWI |
+			ATMEL_LCDC_OWRI | ATMEL_LCDC_MERI | ATMEL_LCDC_EOFI);
 
 	/* ...wait for DMA engine to become idle... */
 	while (lcdc_readl(sinfo, ATMEL_LCDC_DMACON) & ATMEL_LCDC_DMABUSY)
@@ -721,6 +724,20 @@ static int atmel_lcdfb_pan_display(struct fb_var_screeninfo *var,
 	return 0;
 }
 
+static int atmel_lcdfb_ioctl(struct fb_info *info, unsigned int cmd,
+		unsigned long arg)
+{
+	struct atmel_lcdfb_info *sinfo = info->par;
+
+	switch (cmd) {
+	case FBIO_WAITFORVSYNC:
+		wait_for_completion(&sinfo->vsync);
+                return 0;
+	default:
+		return -ENOIOCTLCMD;
+	}
+}
+
 static struct fb_ops atmel_lcdfb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_check_var	= atmel_lcdfb_check_var,
@@ -730,6 +747,7 @@ static struct fb_ops atmel_lcdfb_ops = {
 	.fb_fillrect	= cfb_fillrect,
 	.fb_copyarea	= cfb_copyarea,
 	.fb_imageblit	= cfb_imageblit,
+	.fb_ioctl	= atmel_lcdfb_ioctl,
 };
 
 static irqreturn_t atmel_lcdfb_interrupt(int irq, void *dev_id)
@@ -744,6 +762,8 @@ static irqreturn_t atmel_lcdfb_interrupt(int irq, void *dev_id)
 		/* reset DMA and FIFO to avoid screen shifting */
 		schedule_work(&sinfo->task);
 	}
+	if (status & ATMEL_LCDC_EOFI)
+		complete(&sinfo->vsync);
 	lcdc_writel(sinfo, ATMEL_LCDC_ICR, status);
 	return IRQ_HANDLED;
 }
@@ -835,6 +855,8 @@ static int __init atmel_lcdfb_probe(struct platform_device *pdev)
 	}
 	sinfo->info = info;
 	sinfo->pdev = pdev;
+
+	init_completion(&sinfo->vsync);
 
 	strcpy(info->fix.id, sinfo->pdev->name);
 	info->flags = ATMEL_LCDFB_FBINFO_DEFAULT;
@@ -1091,7 +1113,8 @@ static int atmel_lcdfb_resume(struct platform_device *pdev)
 
 	/* Enable FIFO & DMA errors */
 	lcdc_writel(sinfo, ATMEL_LCDC_IER, ATMEL_LCDC_UFLWI
-			| ATMEL_LCDC_OWRI | ATMEL_LCDC_MERI);
+			| ATMEL_LCDC_OWRI | ATMEL_LCDC_MERI
+                        | ATMEL_LCDC_EOFI);
 
 	return 0;
 }
