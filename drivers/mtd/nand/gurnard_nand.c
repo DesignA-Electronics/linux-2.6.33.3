@@ -29,6 +29,8 @@
 
 #include <asm/io.h>
 
+#include <mach/gurnard_debug_gpios.h>
+
 /* Over how many bytes does the FPGA calculate its ECC values? */
 #define ECC_CHUNK_SIZE 256
 /* How many bytes of ECC do we get for each chunk? */
@@ -111,10 +113,36 @@ static struct nand_ecclayout gurnard_ecc_layout_4k = {
         .oobavail = 316,
 };
 
+/* The first 4-bytes (32-bit word) of the ecc is the bad-block marker
+ * for each of the 4 8-bit devices. We then have 96 bytes of ECC,
+ * followed by 156 bytes of available oob space
+ */
+static struct nand_ecclayout gurnard_ecc_layout_2k = {
+        /* There are 3 bytes of ecc for each 256 bytes of data,
+         * and 4 * 2k = 8k of data. 8k / 256 * 3 = 96
+         **/
+        .eccbytes = 96,
+        /* Note: These must be contiguous, as gurnard_ecc_check
+         * uses a simple memcmp to get the info out
+         */
+        .eccpos = { 4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+                   16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+                   28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+                   40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
+                   52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+                   64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
+                   76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87,
+                   88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
+        },
+        .oobfree = {{.offset = 100, .length = 156}},
+        .oobavail = 156,
+};
+
 enum {
         REG_CFG_SET     = 0x000,
         REG_CFG_CLR     = 0x004,
         REG_BYPASS      = 0x008,
+	REG_IFR		= 0x00c,
 #ifdef USE_TIMING_MODE
 	REG_RD_TIMER	= 0x010,
 	REG_WR_TIMER	= 0x014,
@@ -127,12 +155,17 @@ enum {
         BIT_CLE         = 1 << 1,
         NCE_SHIFT       = 2,
         MASK_NCE        = 3 << NCE_SHIFT,
+	BIT_BUSY_IER	= 1 << 4,
         BIT_BUFF_CLEAR  = 1 << 8,
         BIT_VERIFY      = 1 << 9,
+	BIT_RNB_IER	= 1 << 15,
 	BIT_BUFF_EMPTY	= 1 << 16,
         BIT_RNB         = 1 << 17,
         BIT_BUSY        = 1 << 18,
         BIT_VERIFY_OK   = 1 << 19,
+
+	IFR_RNB		= 1 << 0,
+	IFR_BUSY	= 1 << 1,
 };
 
 #define STACK_ADDR(i) (1 << (i))
@@ -144,7 +177,7 @@ struct mode_timing_info {
 };
 
 /* See Section 7.6.1 of the Gurnard specification
- * These are essneitally bitmasks for a 7.5ns clock, telling the FPGA
+ * These are essentially bitmasks for a 7.5ns clock, telling the FPGA
  * how to clock in/out data from the NAND devices
  */
 struct mode_timing_info mode_timing[] = {
@@ -170,6 +203,7 @@ struct gurnard_nand_stack {
         char name[20];
         struct mtd_info mtd;
         uint8_t width; /* How many chips wide is it (1-4) */
+	int page_shift; /* What is the shift to get the page size? */
 #ifdef USE_BBT_CACHE
 	uint8_t *bbt; /* Array of two-bit values indicating whether a block
 			 is bad, good, or unknown */
@@ -185,6 +219,12 @@ struct gurnard_nand_host {
         uint8_t         *data_tmp;      /* Temporary area for buffer data */
 
         struct gurnard_nand_stack raid_stack;       /* Combined RAID stack */
+
+	struct completion rnb_completion;
+	struct completion busy_completion;
+
+	int		irq;
+	int		has_irq;
 };
 
 /**
@@ -199,7 +239,7 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host,
 				"Selecting chips %d, but devices not ready\n",
 				chip_mask);
 
-	/* If we're selecting a chip, then there should be nothing in the 
+	/* If we're selecting a chip, then there should be nothing in the
 	 * write fifos
 	 */
 	if (chip_mask && reg_readl(BUFF_LEN))
@@ -215,32 +255,61 @@ static inline void gurnard_select_chips(struct gurnard_nand_host *host,
                reg_writel((chip_mask & 0x3) << NCE_SHIFT, CFG_CLR);
 }
 
+/**
+ * This chould be done with a completion from the IRQ handler.
+ * Given that the NAND interface is faster than the FPGA->CPU interface,
+ * we are actually better off to use a busy wait at this stage,
+ * as it's unlikely to be in here long
+ */
 static inline void gurnard_busy_wait(struct gurnard_nand_host *host)
 {
 	unsigned long timeo = jiffies + HZ;
+	gpio_debug_set(DBG_PIN_NAND_BUSY, 1);
 	do {
-		if (!(reg_readl(CFG_SET) & BIT_BUSY))
+		if (!(reg_readl(CFG_SET) & BIT_BUSY)) {
+			gpio_debug_set(DBG_PIN_NAND_BUSY, 0);
 			return;
+		}
 	} while (time_before(jiffies, timeo));
 	dev_err(&host->pdev->dev,
 		"Timeout waiting for busy signal\n");
 	dump_stack();
+	gpio_debug_set(DBG_PIN_NAND_BUSY, 0);
 }
 
+/**
+ * FIXME: This should be done with a completion from the IRQ handler
+ */
 static inline void gurnard_rnb_wait(struct gurnard_nand_host *host)
 {
+#if 0
+	int timeout;
+	gpio_debug_set(DBG_PIN_NAND_RNB, 1);
+	timeout = wait_for_completion_timeout(&host->rnb_completion,
+			msecs_to_jiffies(10000));
+	if (!timeout) {
+		dev_err(&host->pdev->dev,
+				"Timeout waiting for RnB signal\n");
+		dump_stack();
+	}
+#else
 	unsigned long timeo = jiffies + HZ;
 	/* Could take as long as 200ns before RnB changes (tWB) */
+	gpio_debug_set(DBG_PIN_NAND_RNB, 1);
 	reg_readl(CFG_SET);
 	reg_readl(CFG_SET);
 	reg_readl(CFG_SET);
 	do {
-		if (reg_readl(CFG_SET) & BIT_RNB)
+		if (reg_readl(CFG_SET) & BIT_RNB) {
+			gpio_debug_set(DBG_PIN_NAND_RNB, 0);
 			return;
+		}
 	} while (time_before(jiffies, timeo));
 	dev_err(&host->pdev->dev,
 		"Timeout waiting for RnB signal\n");
 	dump_stack();
+#endif
+	gpio_debug_set(DBG_PIN_NAND_RNB, 0);
 }
 
 static inline void gurnard_write_command(struct gurnard_nand_host *host,
@@ -356,11 +425,10 @@ static inline int n_way_match(uint32_t v, int n)
 /* Converts the 64-bit byte offset within the nand device to the
  * 5-byte page address
  */
-static inline void offset_to_page(uint64_t from, uint8_t *addr)
+static inline void offset_to_page(struct gurnard_nand_stack *stack,
+		uint64_t from, uint8_t *addr)
 {
-        /* FIXME: Should be Converting the pagesize into this shift */
-        from >>= 12; // we skip the first 4096 bytes, since that is the page size
-        from >>= 2; // then we divide by 4, since we're multiplexed up that far
+	from >>= stack->page_shift;
         addr[0] = 0; /* We never want to address individual bytes */
         addr[1] = 0;
         addr[2] = from;
@@ -371,36 +439,32 @@ static inline void offset_to_page(uint64_t from, uint8_t *addr)
 /**
  * Jump a 5-byte address to the OOB region
  */
-static inline void addr_to_oob(uint8_t *addr)
+static inline void addr_to_oob(struct gurnard_nand_stack *stack,
+		uint8_t *addr)
 {
-        /* FIXME: should this be
-         * addr[1] = (pagesize / 4) >> 8;
-         */
-        addr[1] = 0x10;
+        addr[1] = 1 << (stack->page_shift - 8 - 2);
 }
 
 /* Converts the 64-bit byte offset within the nand device to the
  * 3-byte block address
  */
-static inline void offset_to_block(uint64_t from, uint8_t *addr)
+static inline void offset_to_block(struct gurnard_nand_stack *stack,
+		uint64_t from, uint8_t *addr)
 {
-        /* FIXME: Should be Converting the pagesize into this shift */
-        from >>= 12; // we skip the first 4096 bytes, since that is the page size
-        from >>= 2; // then we divide by 4, since we're multiplexed up that far
+	from >>= stack->page_shift;
         addr[0] = from;
         addr[1] = from >> 8;
         addr[2] = from >> 16;
 }
 
 #ifdef USE_BBT_CACHE
-static inline uint32_t offset_to_block_id(uint64_t block)
+static inline uint32_t offset_to_block_id(struct gurnard_nand_stack *stack,
+		uint64_t block)
 {
-	/* FIXME: Should be dividing by erasesize */
-	/* 12 because 2^12 = 4096 byte pages
-	 * 2 because of the 2^2 = 4-way chips
+	/*
 	 * 6 because 2^6 = 64 pages/block
 	 */
-	return block >> (12 + 2 + 6);
+	return block >> (stack->page_shift + 6);
 }
 #endif
 
@@ -426,7 +490,7 @@ static int gurnard_read_onfi(struct gurnard_nand_host *host, uint32_t device_add
 
         if (device_addr != 1 && device_addr != 2) {
                 dev_err(&host->pdev->dev,
-                        "Cannot read ID from anything other than device 1 or 2\n");
+                        "Cannot read ONFI from anything other than device 1 or 2\n");
                 return -ENODEV;
         }
 	stack = &host->stack[device_addr - 1];
@@ -471,6 +535,31 @@ static int gurnard_read_onfi(struct gurnard_nand_host *host, uint32_t device_add
 	vfree(id);
 
         return 256;
+}
+
+/**
+ * Determine if these NAND chips support the get/set features
+ * commands. This is available from the ONFI data
+ */
+static int gurnard_supports_features(struct gurnard_nand_host *host)
+{
+	char buf[256];
+	int ret;
+
+	ret = gurnard_read_onfi(host, 1, buf);
+
+	if (ret < 0)
+		return ret;
+
+	if (!(buf[8] & 0x4))
+		return 0;
+
+	ret = gurnard_read_onfi(host, 2, buf);
+
+	if (ret < 0)
+		return ret;
+
+	return (buf[8] & 0x4) != 0;
 }
 
 static int gurnard_get_features(struct gurnard_nand_host *host,
@@ -765,9 +854,9 @@ static void gurnard_nand_read_full_page_dummy(struct mtd_info *mtd,
 
 	gurnard_select_chips(host, device_addr);
 
-        offset_to_page(from, addr);
+        offset_to_page(stack, from, addr);
         if (!data)
-                addr_to_oob(addr);
+                addr_to_oob(stack, addr);
 	len = data ? mtd->writesize : 0 +
 	      oob ? mtd->oobsize : 0;
 
@@ -823,11 +912,11 @@ static int gurnard_nand_read_page(struct mtd_info *mtd, loff_t from,
         else
                 gurnard_select_chips(host, stack->device_addr);
 
-        offset_to_page(from, addr);
+        offset_to_page(stack, from, addr);
 
         /* OOB only read, so skip past the page to the oob */
         if (!buf)
-                addr_to_oob(addr);
+                addr_to_oob(stack, addr);
 
 #ifdef RAW_ACCESS_DEBUG
         printk("read: len=%d dev=0x%x 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
@@ -913,11 +1002,11 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
 
         gurnard_select_chips(host, stack->device_addr);
 
-        offset_to_page(to, addr);
+        offset_to_page(stack, to, addr);
 
         /* OOB only write, so skip past the page to the oob */
         if (!buf)
-                addr_to_oob(addr);
+                addr_to_oob(stack, addr);
 
 #ifdef RAW_ACCESS_DEBUG
         printk("write: dev=0x%x 0x%llx 0x%2.2x%2.2x%2.2x%2.2x%2.2x%s%s\n",
@@ -975,6 +1064,11 @@ static int gurnard_nand_write_page(struct mtd_info *mtd, loff_t to,
 	 * confirm the data is valid */
 #ifdef USE_FPGA_READ_VERIFY
 	reg_writel(BIT_VERIFY, CFG_SET);
+#if 0	// is the verify bit working?
+	if (!(reg_readl(CFG_SET) & BIT_VERIFY))
+		dev_err(&host->pdev->dev,
+			"Failed to set verify bit: 0x%X\n", reg_readl(CFG_SET));
+#endif
 	if (stack->device_addr == RAID_ADDR) {
 		/* Raid reads need two separate verifications */
 		gurnard_nand_read_full_page_dummy(mtd, STACK_ADDR(0),
@@ -1042,11 +1136,11 @@ static int gurnard_nand_erase_block(struct gurnard_nand_stack *stack,
         struct gurnard_nand_host *host = stack->host;
 
 #ifdef RAW_ACCESS_DEBUG
-        printk("erase block: dev=%d block_addr=0x%llx\n", 
+        printk("erase block: dev=%d block_addr=0x%llx\n",
 			stack->device_addr, block_addr);
 #endif
         gurnard_select_chips(host, stack->device_addr);
-        offset_to_block(block_addr, addr);
+        offset_to_block(stack, block_addr, addr);
         gurnard_write_command(host, NAND_CMD_ERASE1);
         gurnard_write_address(host, addr, ARRAY_SIZE(addr));
         gurnard_write_command(host, NAND_CMD_ERASE2);
@@ -1079,7 +1173,7 @@ static void gurnard_block_bbt_set(struct gurnard_nand_stack *stack,
 		gurnard_block_bbt_set(&host->stack[0], offset, marker);
 		gurnard_block_bbt_set(&host->stack[1], offset, marker);
 	} else {
-		int block = offset_to_block_id(offset);
+		int block = offset_to_block_id(stack, offset);
 		/* Clear the old marker */
 		stack->bbt[block / 4] &= ~(BLOCK_MASK << ((block & 3) * 2));
 		/* Set the new one */
@@ -1090,7 +1184,7 @@ static void gurnard_block_bbt_set(struct gurnard_nand_stack *stack,
 static inline uint8_t gurnard_block_bbt_get(struct gurnard_nand_stack *stack,
 		loff_t offset)
 {
-	int block = offset_to_block_id(offset);
+	int block = offset_to_block_id(stack, offset);
 	if (stack->device_addr == RAID_ADDR)
 		BUG();
 	return (stack->bbt[block / 4] >> ((block & 3) * 2)) & BLOCK_MASK;
@@ -1486,6 +1580,32 @@ static int gurnard_nand_write(struct mtd_info *mtd, loff_t to, size_t len,
         return ret;
 }
 
+static irqreturn_t gurnard_nand_irq(int irq, void *dev_id)
+{
+        struct gurnard_nand_host *host = dev_id;
+	uint32_t ifr;
+
+	gpio_debug_set(DBG_PIN_NAND_IRQ, 1);
+
+	ifr = reg_readl(IFR);
+	/* Acknowledge the IRQ */
+	reg_writel(ifr, IFR);
+
+        printk("%s(): ifr=0x%x/0x%x cfg=0x%x\n", __FUNCTION__, ifr,
+			reg_readl(IFR), reg_readl(CFG_SET));
+
+
+	if (ifr & IFR_RNB)
+		complete(&host->rnb_completion);
+
+	if (ifr & IFR_BUSY)
+		complete(&host->busy_completion);
+
+	gpio_debug_set(DBG_PIN_NAND_IRQ, 0);
+
+        return IRQ_HANDLED;
+}
+
 #ifdef USE_TIMING_MODE
 static int gurnard_get_timing_mode(struct gurnard_nand_host *host,
 		uint32_t *modep)
@@ -1612,6 +1732,9 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
         struct gurnard_nand_host *host = platform_get_drvdata(pdev);
         int i, n;
         int res;
+#ifdef USE_TIMING_MODE
+	int do_timing;
+#endif
 
         /* Make sure the temporary buffers are all in place */
         if (!host->oob_tmp) {
@@ -1631,15 +1754,46 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                         return -ENOMEM;
                 }
         }
+
+#if 0
+	if (!host->has_irq) {
+		int ret;
+
+		/* Disable all the IRQs */
+		reg_writel(BIT_RNB_IER | BIT_BUSY_IER, CFG_CLR);
+
+		/* Acknowledge any outstanding IRQs */
+		reg_writel(IFR_RNB | IFR_BUSY, IFR);
+
+		ret = request_irq(host->irq, gurnard_nand_irq, 0,
+				pdev->name, host);
+		if (ret) {
+			dev_err(&pdev->dev, "Cannot claim IRQ\n");
+			return ret;
+		}
+		host->has_irq = 1;
+
+		/* Enable the IRQs that we're interested in */
+		reg_writel(BIT_RNB_IER | BIT_BUSY_IER, CFG_SET);
+	}
+#endif
+
 	/* Reset the devices */
 	gurnard_reset(host, RAID_ADDR);
 #ifdef USE_TIMING_MODE
-	/* Force the device into mode 0, just so
-	 * we make sure the onfi read happens ok
-	 */
-	res = gurnard_set_timing_mode(host, 0);
-	if (res < 0)
-		return res;
+	do_timing = gurnard_supports_features(host);
+	if (do_timing < 0)
+		return do_timing;
+
+	if (do_timing > 0) {
+		/* Force the device into mode 0, just so
+		 * we make sure the onfi read happens ok
+		 */
+		res = gurnard_set_timing_mode(host, 0);
+		if (res < 0)
+			return res;
+	} else
+		printk("NAND: Features not supported, so timing not adjusted\n");
 #endif
 
         for (i = 0; i < MAX_STACKS; i++) {
@@ -1714,6 +1868,8 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
 
                 if (writesize == 4096)
                         mtd->ecclayout = &gurnard_ecc_layout_4k;
+		else if (writesize == 2048)
+                        mtd->ecclayout = &gurnard_ecc_layout_2k;
                 else {
                         dev_err(dev, "Stack %d: Invalid device page size: %d\n",
                                         i, writesize);
@@ -1727,22 +1883,26 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                 mtd->writesize = writesize * 4;
                 mtd->erasesize = erasesize * 4;
                 mtd->size = size * 4;
-                // cap it for testing to 128MB
-                //mtd->size = 128 * 1024 * 1024;
                 mtd->oobsize = oobsize * 4;
+		stack->page_shift = ffs(mtd->writesize) - 1;
 
+		printk("Page shift=0x%x writesize=0x%x\n", stack->page_shift,
+				mtd->writesize);
+
+#if 0
 		if (mtd->erasesize != 0x00100000) {
 			dev_err(dev, "Stack %d: Need to have 1MB/block sizes (0x%x)\n",
-					i, mtd->writesize);
+					i, mtd->erasesize);
 			mtd->priv = NULL;
 			continue;
 		}
+#endif
 
 #ifdef USE_BBT_CACHE
 		/* We need two bits for each block, so can fit 4
 		 * into each byte. 0 values indicate unknwon */
-		stack->bbt = vmalloc(offset_to_block_id(mtd->size) / 4);
-		memset(stack->bbt, 0, offset_to_block_id(mtd->size) / 4);
+		stack->bbt = vmalloc(offset_to_block_id(stack, mtd->size) / 4);
+		memset(stack->bbt, 0, offset_to_block_id(stack, mtd->size) / 4);
 #endif
 
                 /* We don't have partitions on this device, just
@@ -1791,15 +1951,18 @@ static ssize_t force_probe(struct device *dev, struct device_attribute *attr,
                         stack->device_addr = RAID_ADDR;
 
 #ifdef USE_TIMING_MODE
-			e = gurnard_autoconfigure_timings(host);
-			if (e < 0) {
-				dev_err(dev, "Unable to configure NAND timings\n");
-				return e;
+			if (do_timing) {
+				e = gurnard_autoconfigure_timings(host);
+				if (e < 0) {
+					dev_err(dev, "Unable to configure NAND timings\n");
+					return e;
+				}
 			}
 #endif
                         /* Just take the settings from stack 0,
                          * since they're all identical */
                         stack->width = host->stack[0].width;
+			stack->page_shift = host->stack[0].page_shift;
                         mtd->priv = stack;
                         snprintf(stack->name, sizeof(stack->name), "Raid");
                         mtd->name = stack->name;
@@ -1964,17 +2127,6 @@ static const struct attribute_group gurnard_group = {
         .attrs = gurnard_attributes,
 };
 
-#if 0
-static irqreturn_t gurnard_nand_irq(int irq, void *dev_id)
-{
-        struct gurnard_nand_host *host = dev_id;
-
-        printk("GURNARD NAND IRQ\n");
-
-        return IRQ_HANDLED;
-}
-#endif
-
 static int __init gurnard_nand_probe(struct platform_device *pdev)
 {
         struct gurnard_nand_host *host;
@@ -2018,18 +2170,16 @@ static int __init gurnard_nand_probe(struct platform_device *pdev)
                 goto map_data_failed;
         }
 
-#if 0
-        ret = request_irq(irq->start, gurnard_nand_irq, 0, pdev->name, host);
-        if (ret) {
-                dev_err(&pdev->dev, "Cannot claim IRQ\n");
-                goto request_irq_failed;
-        }
-#endif
+	init_completion(&host->rnb_completion);
+	init_completion(&host->busy_completion);
+
+	host->irq = irq->start;
         platform_set_drvdata(pdev, host);
 
         sysfs_create_group(&pdev->dev.kobj, &gurnard_group);
 
         return 0;
+
 map_data_failed:
         iounmap(host->reg_base);
 map_failed:
@@ -2043,6 +2193,9 @@ static int __exit gurnard_nand_remove(struct platform_device *pdev)
 	int i;
 
 	dev_warn(&host->pdev->dev, "Deleting MTD device\n");
+
+	if (host->has_irq)
+		free_irq(host->irq, host);
 
 	for (i = 0; i < MAX_STACKS; i++) {
 		if (host->stack[i].mtd.priv) {
