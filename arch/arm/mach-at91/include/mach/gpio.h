@@ -14,6 +14,7 @@
 #define __ASM_ARCH_AT91RM9200_GPIO_H
 
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <asm/irq.h>
 
 #define PIN_BASE		NR_AIC_IRQS
