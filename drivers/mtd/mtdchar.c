@@ -146,6 +146,7 @@ static ssize_t mtd_read(struct file *file, char __user *buf, size_t count,loff_t
 	int ret=0;
 	int len;
 	char *kbuf;
+	int malloc_len;
 
 	DEBUG(MTD_DEBUG_LEVEL0,"MTD_read\n");
 
@@ -158,20 +159,21 @@ static ssize_t mtd_read(struct file *file, char __user *buf, size_t count,loff_t
 	/* FIXME: Use kiovec in 2.5 to lock down the user's buffers
 	   and pass them directly to the MTD functions */
 
-	if (count > MAX_KMALLOC_SIZE)
-		kbuf=kmalloc(MAX_KMALLOC_SIZE, GFP_KERNEL);
-	else
-		kbuf=kmalloc(count, GFP_KERNEL);
-
+	/* Keep reducing the allocation size until we succeed, or it's too small */
+	malloc_len = min((int)count, MAX_KMALLOC_SIZE);
+	do {
+		kbuf=kmalloc(malloc_len, GFP_KERNEL);
+		if (kbuf || malloc_len <= 4096)
+			break;
+		malloc_len / 2;
+	} while (!kbuf);
 	if (!kbuf)
 		return -ENOMEM;
 
+
 	while (count) {
 
-		if (count > MAX_KMALLOC_SIZE)
-			len = MAX_KMALLOC_SIZE;
-		else
-			len = count;
+		len = malloc_len;
 
 		switch (mfi->mode) {
 		case MTD_MODE_OTP_FACTORY:
@@ -239,6 +241,7 @@ static ssize_t mtd_write(struct file *file, const char __user *buf, size_t count
 	size_t total_retlen=0;
 	int ret=0;
 	int len;
+	int malloc_len;
 
 	DEBUG(MTD_DEBUG_LEVEL0,"MTD_write\n");
 
@@ -251,20 +254,19 @@ static ssize_t mtd_write(struct file *file, const char __user *buf, size_t count
 	if (!count)
 		return 0;
 
-	if (count > MAX_KMALLOC_SIZE)
-		kbuf=kmalloc(MAX_KMALLOC_SIZE, GFP_KERNEL);
-	else
-		kbuf=kmalloc(count, GFP_KERNEL);
-
+	/* Keep reducing the allocation size until we succeed, or it's too small */
+	malloc_len = min((int)count, MAX_KMALLOC_SIZE);
+	do {
+		kbuf=kmalloc(malloc_len, GFP_KERNEL);
+		if (kbuf || malloc_len <= 4096)
+			break;
+		malloc_len / 2;
+	} while (!kbuf);
 	if (!kbuf)
 		return -ENOMEM;
 
 	while (count) {
-
-		if (count > MAX_KMALLOC_SIZE)
-			len = MAX_KMALLOC_SIZE;
-		else
-			len = count;
+		len = malloc_len;
 
 		if (copy_from_user(kbuf, buf, len)) {
 			kfree(kbuf);
