@@ -1,0 +1,27 @@
+before_script:
+  - cat >/root/.ssh/id_rsa <<EOF
+  - $GITLAB_SSH_KEY
+  - EOF
+  - chmod 0600 /root/.ssh/id_rsa
+
+master-builder:
+  script:
+  - git clone git@git.sporelab.io:bluewatersys/Salmon-Test-Tools.git toolchain
+  - TOOLCHAIN=`pwd`/toolchain/arm/arm-2010q1/bin/arm-none-linux-gnueabi-
+  - make ARCH=arm CROSS_COMPILE=$TOOLCHAIN salmon_test_system_defconfig
+  - make ARCH=arm CROSS_COMPILE=$TOOLCHAIN -j 20
+  - make ARCH=arm CROSS_COMPILE=$TOOLCHAIN uImage -j 20
+  tags:
+  except:
+  - tags
+
+main-build-trigger:
+  script:
+  - curl -X POST -F token=$TRIGGER_TOKEN $TRIGGER_URL
+  type: deploy
+  tags:
+  except:
+  - tags
+
+
+
