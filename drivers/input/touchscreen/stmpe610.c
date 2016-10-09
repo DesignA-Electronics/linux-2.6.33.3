@@ -116,8 +116,6 @@ static int stmpe610_write_register(struct stmpe610 *ts, u8 reg, u8 val)
 	transfer[0].rx_buf = 0;
 	transfer[0].len = 1;
 	transfer[0].cs_change = 0;
-	//transfer[0].speed_hz = 800000;
-	//transfer[0].bits_per_word = 8;
 	spi_message_add_tail(&transfer[0], &message);
 
 	/* Data */
@@ -126,8 +124,6 @@ static int stmpe610_write_register(struct stmpe610 *ts, u8 reg, u8 val)
 	transfer[1].rx_buf = 0;
 	transfer[1].len = 1;
 	transfer[1].cs_change = 0;
-	//transfer[1].speed_hz = 800000;
-	//transfer[1].bits_per_word = 8;
 	spi_message_add_tail(&transfer[1], &message);
 
 	return spi_sync(spi, &message);
@@ -151,8 +147,6 @@ static u8 stmpe610_read_register(struct stmpe610 *ts, u8 reg)
 	transfer[0].rx_buf = 0;
 	transfer[0].len = 1;
 	transfer[0].cs_change = 0;
-	//transfer[0].speed_hz = 800000;
-	//transfer[0].bits_per_word = 8;
 	spi_message_add_tail(&transfer[0], &message);
 
 	/* Data */
@@ -161,8 +155,6 @@ static u8 stmpe610_read_register(struct stmpe610 *ts, u8 reg)
 	transfer[1].rx_buf = &data;
 	transfer[1].len = 1;
 	transfer[1].cs_change = 0;
-	//transfer[1].speed_hz = 800000;
-	//transfer[1].bits_per_word = 8;
 	spi_message_add_tail(&transfer[1], &message);
 
 	ret = spi_sync(spi, &message);
