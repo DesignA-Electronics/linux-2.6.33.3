@@ -202,10 +202,21 @@ static inline u16 stmpe610_read_register16(struct stmpe610 *ts, u8 reg)
 static int configure_tsc(struct stmpe610 *ts)
 {
 	u8 value;
+	u16 chip_id;
 
 	/* Reset the touchscreen */
 	stmpe610_write_register(ts, SYS_CTRL1, 0x02);
 
+	/* Confirm we have the correct firmware revision */
+	chip_id = stmpe610_read_register16(ts, CHIP_ID);
+
+	dev_info(&ts->spi->dev, "STMPE610: chip: %xv%x\n",
+		chip_id, stmpe610_read_register(ts, ID_VER));
+	if (chip_id != 0x811) {
+		dev_err(&ts->spi->dev, "incorrect stmpe610 chip id: 0x%x\n", 
+			chip_id);
+		return -EINVAL;
+	}
 	/* Enable the touchscreen and ADC */
 	value = stmpe610_read_register(ts, SYS_CTRL2);
 	value &= ~(1<<0|1<<1|1<<2);
@@ -473,10 +484,16 @@ static int __devinit stmpe610_probe(struct spi_device *spi)
 	ts->pendown = 0;
 	ts->last_irq_time = 0;
 
-	configure_tsc(ts);
+	err = configure_tsc(ts);
+	if (err) {
+		dev_err(&spi->dev, "failed to configure device\n");
+		goto err_configure;
+	}
 
 	return 0;
 
+ err_configure:
+	del_timer_sync(&ts->timer);
  err_remove_attr_group:
 	sysfs_remove_group(&spi->dev.kobj, &stmpe610_attr_group);
  err_free_irq:
