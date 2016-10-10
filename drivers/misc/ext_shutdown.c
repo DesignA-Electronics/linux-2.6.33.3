@@ -41,16 +41,19 @@ struct plat_data {
 struct ext_shutdown {
         struct device *dev;
 	struct plat_data *pdata;
+	int shdn_flag;
+	int shdn_gpio;
+	int running;
 };
-
-int shdn_flag = 0;
-int shdn_gpio = 0;
 
 static irqreturn_t ext_shutdown_irq(int irq, void *dev_id)
 {
 	struct ext_shutdown *priv = dev_id;
 	int active = 0;
 	int i;
+
+	if (!priv->running)
+		return IRQ_HANDLED;
 
 	for (i = 0; i < priv->pdata->irq_count; i++) {
 		if (gpio_get_value(priv->pdata->irq_gpios[i]) == 0) {
@@ -59,11 +62,11 @@ static irqreturn_t ext_shutdown_irq(int irq, void *dev_id)
 		}
 	}
 	if (active) {
-		shdn_gpio = priv->pdata->irq_gpios[i] - PIN_BASE;
+		priv->shdn_gpio = priv->pdata->irq_gpios[i] - PIN_BASE;
 		for (i = 0; i < priv->pdata->shdn_count; i++) {
 			gpio_set_value(priv->pdata->shdn_gpios[i], 0);
 		}
-		shdn_flag = 1;
+		priv->shdn_flag = 1;
 
 		printk("Over current\n");
 	}
@@ -71,13 +74,36 @@ static irqreturn_t ext_shutdown_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static ssize_t ext_shutdown_running_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t n)
+{
+	struct ext_shutdown *priv = platform_get_drvdata(to_platform_device(dev));
+	int value;
+
+	if (sscanf(buf, "%d", &value) != 1) {
+		printk(KERN_ERR "ext_shutdown_running_store: Invalid value\n");
+		return -EINVAL;
+	}
+	priv->running = value;
+	return n;
+}
+static ssize_t ext_shutdown_running_read(struct device *dev,
+                                      struct device_attribute *attr, char *buf)
+{
+	struct ext_shutdown *priv = platform_get_drvdata(to_platform_device(dev));
+	return sprintf(buf, "%d", priv->running);
+}
+static DEVICE_ATTR(running, S_IRUSR | S_IWUSR, ext_shutdown_running_read, ext_shutdown_running_store);
+
 static ssize_t ext_shutdown_read_flag(struct device *dev,
                                       struct device_attribute *attr, char *buf)
 {
 	ssize_t ret;
+	struct ext_shutdown *priv = platform_get_drvdata(to_platform_device(dev));
 
-	ret = sprintf(buf, "%d", shdn_flag);
-	shdn_flag = 0;
+	ret = sprintf(buf, "%d", priv->shdn_flag);
+	priv->shdn_flag = 0;
 
 	return ret;
 }
@@ -86,13 +112,15 @@ static DEVICE_ATTR(flag, S_IRUSR | S_IRUGO, ext_shutdown_read_flag, NULL);
 static ssize_t ext_shutdown_read_gpio(struct device *dev,
                                       struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d", shdn_gpio);
+	struct ext_shutdown *priv = platform_get_drvdata(to_platform_device(dev));
+	return sprintf(buf, "%d", priv->shdn_gpio);
 }
 static DEVICE_ATTR(gpio, S_IRUSR | S_IRUGO, ext_shutdown_read_gpio, NULL);
 
 static struct attribute *ext_shutdown_attrs[] = {
 	&dev_attr_flag.attr,
 	&dev_attr_gpio.attr,
+	&dev_attr_running.attr,
 	NULL,
 };
 
@@ -110,6 +138,9 @@ static int __init ext_shutdown_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	priv->shdn_flag = 0;
+	priv->shdn_gpio = 0;
+	priv->running = 1;
 	priv->dev = &pdev->dev;
         platform_set_drvdata(pdev, priv);
 
