@@ -50,7 +50,7 @@ static void __init sn9g45_map_io(void)
 	/* USART0 not connected on the -EK board */
 	/* USART1 on ttyS2. (Rx, Tx, RTS, CTS) */
 	at91_register_uart(AT91SAM9G45_ID_US1, 1, 0);
-	at91_register_uart(AT91SAM9G45_ID_US2, 2, 
+	at91_register_uart(AT91SAM9G45_ID_US2, 2,
 			   ATMEL_UART_CTS | ATMEL_UART_RTS);
 	at91_register_uart(AT91SAM9G45_ID_US3, 3, ATMEL_UART_RTS);
 
@@ -278,7 +278,10 @@ static struct at91_tsadcc_data sn9g45_tsadcc_data = {
 static struct i2c_board_info __initdata sn9g45_i2c_devices[] = {
 	{
 		I2C_BOARD_INFO("tlv320aic23", 0x1a),
-        },
+	},
+	{
+		I2C_BOARD_INFO("ds1307", 0x68),
+	},
 };
 
 static void __init sn9g45_board_init(void)
