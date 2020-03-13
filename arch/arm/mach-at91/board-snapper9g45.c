@@ -67,14 +67,14 @@ static void __init sn9g45_init_irq(void)
  * USB HS Host port (common to OHCI & EHCI)
  */
 static struct at91_usbh_data __initdata sn9g45_usbh_hs_data = {
-	.ports		= 1,
+	.ports		= 2,
 };
 
 /*
  * USB HS Device port
  */
 static struct usba_platform_data __initdata sn9g45_usba_udc_data = {
-	.vbus_pin	= AT91_PIN_PC0,
+	.vbus_pin	= -1,
 };
 
 /*
@@ -82,7 +82,7 @@ static struct usba_platform_data __initdata sn9g45_usba_udc_data = {
  */
 static struct at91_eth_data __initdata sn9g45_macb_data = {
 	.is_rmii	= 1,
-        .phy_mask       = 0x00, //* Phy 0x1b or 0x1f */
+	.phy_mask       = 0x00, //* Phy 0x1b or 0x1f */
 };
 
 /*
